@@ -58,6 +58,8 @@
   <ItemGroup>
     <Compile Include="Assets/CommU/CS/CS_CommU.cs" />
     <Compile Include="Assets/CommU/CS/CommUSyudou.cs" />
+    <Compile Include="Assets/DataCollect/CS/DataCollectorBase.cs" />
+    <Compile Include="Assets/DataCollect/CS/DataCollect.cs" />
     <Compile Include="Assets/CommU/CS/CS_TestRotateBone.cs" />
     <Compile Include="Assets/TutorialInfo/Scripts/Readme.cs" />
     <Compile Include="Assets/CommU/CS/CS_JointLimitDefinition.cs" />

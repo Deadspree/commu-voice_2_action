@@ -1,0 +1,5 @@
+﻿index,image_file,body_yaw,body_pitch,right_arm_pitch,right_arm_roll,left_arm_pitch,left_arm_roll,face_pitch,face_yaw,face_roll,eye_pitch,right_eye_yaw,left_eye_yaw,eyelid,mouth
+0,0.png,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+1,1.png,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+2,2.png,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+3,3.png,0,0,0,0,0,0,0,0,0,0,0,0,0,0
