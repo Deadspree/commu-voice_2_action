@@ -1,1 +1,6 @@
 ./vscode
+
+# Unity generated folders
+simulation/unity/commu/Library/
+simulation/unity/commu/Temp/
+simulation/unity/commu/Logs/
