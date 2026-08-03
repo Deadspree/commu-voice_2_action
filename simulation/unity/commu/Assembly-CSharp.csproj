@@ -57,6 +57,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Assets/CommU/CS/CS_CommU.cs" />
+    <Compile Include="Assets/CommU/CS/CS_RandomMotion.cs" />
     <Compile Include="Assets/CommU/CS/CommUSyudou.cs" />
     <Compile Include="Assets/DataCollect/CS/DataCollectorBase.cs" />
     <Compile Include="Assets/DataCollect/CS/DataCollect.cs" />

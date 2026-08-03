@@ -47,7 +47,7 @@ public static class CS_JointLimitDefinition
 		new CommUJointLimit(CommUJoint.LeftArmPitch, new Vector3(1f, 0f, 0f), -180f, 180f),
 		new CommUJointLimit(CommUJoint.LeftArmRoll, new Vector3(0f, 0f, 1f), -15f, 30f),
 		new CommUJointLimit(CommUJoint.FacePitch, new Vector3(1f, 0f, 0f), -12f, 12f),
-		new CommUJointLimit(CommUJoint.FaceYaw, new Vector3(0f, 1f, 0f), -0f, 0f),
+		new CommUJointLimit(CommUJoint.FaceYaw, new Vector3(0f, 1f, 0f), -10f, 10f),
 		new CommUJointLimit(CommUJoint.FaceRoll, new Vector3(0f, 0f, 1f), -20f, 20f),
 		new CommUJointLimit(CommUJoint.EyePitch, new Vector3(1f, 0f, 0f), -30f, 30f),
 		new CommUJointLimit(CommUJoint.RightEyeYaw, new Vector3(0f, 1f, 0f), -30f, 30f),

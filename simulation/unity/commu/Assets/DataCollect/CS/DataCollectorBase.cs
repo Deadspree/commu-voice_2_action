@@ -11,6 +11,7 @@ public abstract class DataCollectorBase : MonoBehaviour
 	[SerializeField] protected CS_TestRotateBones poseSource;
 	[SerializeField] protected bool captureOnStart = false;
 	[SerializeField] protected float captureIntervalSeconds = 0f;
+	[SerializeField] public bool autoCapture = true;
 	[SerializeField] protected string datasetFolderName = "dataset/commu_pose_dataset";
 	[SerializeField] protected string imagesFolderName = "images";
 	[SerializeField] protected string csvFileName = "angle_joints.csv";
@@ -38,6 +39,8 @@ public abstract class DataCollectorBase : MonoBehaviour
 		}
 	}
 
+	private Coroutine _captureLoopCoroutine;
+
 	protected virtual void Start()
 	{
 		EnsureStoragePaths();
@@ -49,9 +52,26 @@ public abstract class DataCollectorBase : MonoBehaviour
 			CaptureSample();
 		}
 
-		if (captureIntervalSeconds > 0f)
+		if (captureIntervalSeconds > 0f && autoCapture)
 		{
-			StartCoroutine(CaptureLoop());
+			_captureLoopCoroutine = StartCoroutine(CaptureLoop());
+		}
+	}
+
+	public void PauseAutoCapture()
+	{
+		if (_captureLoopCoroutine != null)
+		{
+			StopCoroutine(_captureLoopCoroutine);
+			_captureLoopCoroutine = null;
+		}
+	}
+
+	public void ResumeAutoCapture()
+	{
+		if (_captureLoopCoroutine == null && captureIntervalSeconds > 0f && autoCapture)
+		{
+			_captureLoopCoroutine = StartCoroutine(CaptureLoop());
 		}
 	}
 

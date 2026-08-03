@@ -24,16 +24,38 @@ public class CS_CommU : MonoBehaviour
 
 	void Start()
     {
-		T_Base	= gameObject.transform.GetChild(0);
-		T_Body	= T_Base.transform.GetChild(0);
-		T_Face	= T_Body.transform.GetChild(0);
-		T_Arm_L	= T_Body.transform.GetChild(1);
-		T_Arm_R = T_Body.transform.GetChild(2);
-		T_Mouth = T_Face.transform.GetChild(0);
-		T_Eye_L = T_Face.transform.GetChild(1);
-		T_Eye_R = T_Face.transform.GetChild(2);
-		T_Eyelid_L = T_Face.transform.GetChild(3);
-		T_Eyelid_R = T_Face.transform.GetChild(4);
+
+		// defensive child lookup: prefer explicit assignments in Inspector but fall back to common hierarchy
+		try
+		{
+			if (gameObject.transform.childCount > 0)
+				T_Base = gameObject.transform.GetChild(0);
+			if (T_Base != null && T_Base.childCount > 0)
+				T_Body = T_Base.transform.GetChild(0);
+			if (T_Body != null && T_Body.childCount > 0)
+				T_Face = T_Body.transform.GetChild(0);
+			if (T_Body != null && T_Body.childCount > 2)
+			{
+				T_Arm_L = T_Body.transform.GetChild(1);
+				T_Arm_R = T_Body.transform.GetChild(2);
+			}
+			if (T_Face != null && T_Face.childCount > 0)
+				T_Mouth = T_Face.transform.GetChild(0);
+			if (T_Face != null && T_Face.childCount > 2)
+			{
+				T_Eye_L = T_Face.transform.GetChild(1);
+				T_Eye_R = T_Face.transform.GetChild(2);
+			}
+			if (T_Face != null && T_Face.childCount > 4)
+			{
+				T_Eyelid_L = T_Face.transform.GetChild(3);
+				T_Eyelid_R = T_Face.transform.GetChild(4);
+			}
+		}
+		catch (System.Exception ex)
+		{
+			Debug.LogWarning("CS_CommU.Start: failed to auto-assign children. Please assign transforms in the Inspector. " + ex.Message);
+		}
 
 		Application.targetFrameRate = FrameRate;
 

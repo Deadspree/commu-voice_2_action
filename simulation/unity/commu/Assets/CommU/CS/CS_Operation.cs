@@ -113,7 +113,7 @@ public class CS_Operation : MonoBehaviour
         }
     }
 
-    private async void AddGesture(string input)
+    private void AddGesture(string input)
     {
         string[] input_list = Regex.Split(input, "\t");
         switch (input_list[1])
