@@ -3,6 +3,8 @@ __pycache__/
 third_party/dinov3/
 # Ignore image assets
 *.png
+#Ignore weights
+pose_estimation/weights/*
 
 # Unity generated folders
 simulation/unity/commu/Library/

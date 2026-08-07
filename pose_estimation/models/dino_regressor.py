@@ -27,6 +27,7 @@ class DINORegressor(nn.Module):
         dropout: float = 0.1,
         hidden_dim: int = 256,
         backbone_name: str = "dinov3_vitb16",
+        output_mode: str = "point",
         config: Optional[ModelConfig] = None,
     ) -> None:
         super().__init__()
@@ -34,6 +35,9 @@ class DINORegressor(nn.Module):
         self.config = config or DEFAULT_MODEL_CONFIG
         self.num_joints = num_joints if num_joints != 14 else self.config.num_joints
         self.backbone_name = backbone_name if backbone_name != "dinov3_vitb16" else self.config.backbone_name
+        self.output_mode = output_mode.lower()
+        if self.output_mode not in {"point", "distribution"}:
+            raise ValueError("output_mode must be either 'point' or 'distribution'")
         self.feature_dim = 768
 
         self.backbone = self._build_backbone(
@@ -42,12 +46,20 @@ class DINORegressor(nn.Module):
         )
         self.feature_dim = self._infer_feature_dim()
 
-        self.regression_head = nn.Sequential(
-            nn.Linear(self.feature_dim, hidden_dim if hidden_dim != 256 else self.config.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout if dropout != 0.1 else self.config.dropout),
-            nn.Linear(hidden_dim if hidden_dim != 256 else self.config.hidden_dim, self.num_joints),
-        )
+        if self.output_mode == "point":
+            self.regression_head = nn.Sequential(
+                nn.Linear(self.feature_dim, hidden_dim if hidden_dim != 256 else self.config.hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout if dropout != 0.1 else self.config.dropout),
+                nn.Linear(hidden_dim if hidden_dim != 256 else self.config.hidden_dim, self.num_joints),
+            )
+        else:
+            self.regression_head = nn.Sequential(
+                nn.Linear(self.feature_dim, hidden_dim if hidden_dim != 256 else self.config.hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout if dropout != 0.1 else self.config.dropout),
+                nn.Linear(hidden_dim if hidden_dim != 256 else self.config.hidden_dim, self.num_joints * 2),
+            )
 
         if freeze_backbone if freeze_backbone is not True else self.config.freeze_backbone:
             self.freeze_backbone()
@@ -78,11 +90,16 @@ class DINORegressor(nn.Module):
                 return backbone
 
         try:
+            hub_kwargs = {"source": "local"}
+            # Only pass weights when explicitly provided. Passing weights=None
+            # overrides the hub function's default (Weights.LVD1689M) with None,
+            # which breaks the URL construction.
+            if backbone_weights is not None:
+                hub_kwargs["weights"] = backbone_weights
             return torch.hub.load(
                 str(dinov3_repo_dir),
                 self.backbone_name,
-                source="local",
-                weights=backbone_weights,
+                **hub_kwargs,
             )
         except Exception as exc:  # pragma: no cover - defensive fallback for missing checkpoints
             warnings.warn(
@@ -97,7 +114,7 @@ class DINORegressor(nn.Module):
         except Exception as exc:  # pragma: no cover - defensive import guard
             raise RuntimeError(f"Could not import DINOv3 backbone implementation: {exc}") from exc
 
-        return DinoVisionTransformer(
+        backbone = DinoVisionTransformer(
             img_size=224,
             patch_size=16,
             in_chans=3,
@@ -119,6 +136,11 @@ class DINORegressor(nn.Module):
             n_storage_tokens=4,
             mask_k_bias=True,
         )
+        # The constructor leaves cls_token/storage_tokens/mask_token as
+        # uninitialized (torch.empty) memory. Without init_weights() these can
+        # contain NaN, which poisons the forward pass and the loss.
+        backbone.init_weights()
+        return backbone
 
     def _infer_feature_dim(self) -> int:
         if hasattr(self.backbone, "embed_dim"):
@@ -131,7 +153,7 @@ class DINORegressor(nn.Module):
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if not isinstance(x, torch.Tensor):
             raise TypeError("Expected image tensor input")
 
@@ -143,4 +165,10 @@ class DINORegressor(nn.Module):
 
         if embedding is None:
             raise ValueError("DINOv3 backbone did not return a usable embedding")
-        return self.regression_head(embedding)
+
+        outputs = self.regression_head(embedding)
+        if self.output_mode == "point":
+            return outputs
+
+        mu, log_sigma = torch.chunk(outputs, 2, dim=-1)
+        return mu, log_sigma

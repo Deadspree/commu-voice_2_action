@@ -21,3 +21,20 @@ def test_dino_regressor_output_shape():
         outputs = model(batch)
 
     assert outputs.shape == (2, 14)
+
+
+def test_dino_regressor_distribution_output_shape():
+    model = DINORegressor(
+        num_joints=14,
+        pretrained_backbone=False,
+        freeze_backbone=True,
+        output_mode="distribution",
+    )
+    model.eval()
+
+    batch = torch.randn(2, 3, 224, 224)
+    with torch.no_grad():
+        mu, log_sigma = model(batch)
+
+    assert mu.shape == (2, 14)
+    assert log_sigma.shape == (2, 14)
