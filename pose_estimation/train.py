@@ -22,6 +22,7 @@ from typing import Optional
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -29,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 POSE_ESTIMATION_DIR = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT_DIR = POSE_ESTIMATION_DIR / "checkpoints"
+DEFAULT_RUN_DIR = POSE_ESTIMATION_DIR / "run"
 
 from commu_dataloader import create_train_dataloader, create_val_dataloader
 from configs.dataloader_config import DataLoaderConfig
@@ -201,8 +203,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validate-every", type=int, default=1, help="Run validation every N epochs.")
     parser.add_argument("--backbone-weights", type=str, default=None, help="Path or URL to pretrained DINOv3 backbone weights.")
     parser.add_argument("--checkpoint-dir", type=str, default=str(DEFAULT_CHECKPOINT_DIR), help="Directory to save checkpoints.")
+    parser.add_argument("--run-dir", type=str, default=None, help="Directory to save TensorBoard logs. Defaults to pose_estimation/run/<name> (or pose_estimation/run/run_<timestamp> if no --name is given).")
     parser.add_argument("--name", type=str, default=None, help="Run name used to prefix checkpoint files (e.g. 'myrun' -> myrun_best.pt, myrun_last.pt). Defaults to best.pt/last.pt.")
     parser.add_argument("--resume", type=str, default=None, help="Path to a checkpoint to resume from.")
+    parser.add_argument("--load-weights", type=str, default=None, help="Path to a checkpoint to load ONLY model weights from (no optimizer state, no epoch). Useful for fine-tuning from a pretrained checkpoint.")
+    parser.add_argument("--unfreeze-backbone", action="store_true", help="Unfreeze the backbone so its weights are trained too. By default the backbone is frozen.")
     parser.add_argument("--log-interval", type=int, default=10, help="Log every N batches during training.")
     return parser.parse_args()
 
@@ -251,7 +256,7 @@ def main() -> None:
         num_joints=model_cfg.num_joints,
         pretrained_backbone=model_cfg.pretrained_backbone,
         backbone_weights=args.backbone_weights or model_cfg.backbone_weights,
-        freeze_backbone=model_cfg.freeze_backbone,
+        freeze_backbone=model_cfg.freeze_backbone and not args.unfreeze_backbone,
         dropout=model_cfg.dropout,
         hidden_dim=model_cfg.hidden_dim,
         backbone_name=model_cfg.backbone_name,
@@ -288,6 +293,18 @@ def main() -> None:
     best_ckpt_path = checkpoint_dir / f"{prefix}best.pt"
     last_ckpt_path = checkpoint_dir / f"{prefix}last.pt"
 
+    # TensorBoard log directory. Defaults to pose_estimation/run/<name> when a
+    # run name is given, otherwise pose_estimation/run/run_<timestamp>.
+    if args.run_dir:
+        tb_log_dir = Path(args.run_dir)
+    elif args.name:
+        tb_log_dir = DEFAULT_RUN_DIR / args.name
+    else:
+        tb_log_dir = DEFAULT_RUN_DIR / f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    tb_log_dir.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(log_dir=str(tb_log_dir))
+    print(f"TensorBoard logs -> {tb_log_dir}")
+
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
@@ -295,6 +312,18 @@ def main() -> None:
         start_epoch = ckpt.get("epoch", 0) + 1
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         print(f"Resumed from {args.resume} at epoch {start_epoch}")
+
+    if args.load_weights:
+        ckpt = torch.load(args.load_weights, map_location=device)
+        # Load only the model weights. Ignore optimizer state, epoch, and any
+        # other training metadata so we start training fresh from these weights.
+        state_dict = ckpt.get("model_state_dict", ckpt)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"  [load-weights] Missing keys: {missing}")
+        if unexpected:
+            print(f"  [load-weights] Unexpected keys: {unexpected}")
+        print(f"Loaded model weights from {args.load_weights} (optimizer state NOT loaded)")
 
     config_snapshot = {
         "output_mode": args.output_mode,
@@ -327,6 +356,13 @@ def main() -> None:
                 f"{elapsed:.1f}s"
             )
 
+            # Log to TensorBoard.
+            writer.add_scalar("loss/train", train_loss, epoch)
+            writer.add_scalar("loss/val", val_loss, epoch)
+            if "rmse" in val_metrics:
+                writer.add_scalar("rmse/val", val_metrics["rmse"], epoch)
+            writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 save_checkpoint(
@@ -344,6 +380,8 @@ def main() -> None:
                 f"train_loss={train_loss:.4f} | "
                 f"{elapsed:.1f}s"
             )
+            # Log train loss even on non-validation epochs.
+            writer.add_scalar("loss/train", train_loss, epoch)
 
         save_checkpoint(
             last_ckpt_path,
@@ -359,6 +397,11 @@ def main() -> None:
     with (checkpoint_dir / "config.json").open("w", encoding="utf-8") as handle:
         json.dump(config_snapshot, handle, indent=2, default=str)
 
+    # Persist the run config alongside the TensorBoard logs too.
+    with (tb_log_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config_snapshot, handle, indent=2, default=str)
+
+    writer.close()
     print(f"Training finished. Best val loss: {best_val_loss:.4f}")
 
 

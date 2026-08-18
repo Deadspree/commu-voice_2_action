@@ -75,7 +75,9 @@ class CommuDataset(Dataset[Tuple[torch.Tensor, torch.Tensor]]):
         if self.transform is not None:
             image = self.transform(image)
 
-        joint_tensor = torch.tensor(joint_values, dtype=torch.float32)
+        # Normalize joint angles to roughly [-1, 1] by dividing by angle_scale.
+        # The same scale must be used to denormalize predictions back to degrees.
+        joint_tensor = torch.tensor(joint_values, dtype=torch.float32) / self.config.angle_scale
         return image, joint_tensor
 
     @staticmethod

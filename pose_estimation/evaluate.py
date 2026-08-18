@@ -65,8 +65,19 @@ def evaluate(
     loss_fn,
     device: torch.device,
     output_mode: str,
+    angle_scale: float = 180.0,
 ) -> dict[str, float]:
-    """Evaluate on a loader and return aggregate metrics."""
+    """Evaluate on a loader and return aggregate metrics.
+
+    The dataloader returns normalized joint targets (divided by angle_scale).
+    Predictions and targets are denormalized back to degrees before computing
+    RMSE so the reported metrics are in degrees. The loss is computed on the
+    normalized values (matching training).
+
+    In addition to the overall loss/RMSE, per-joint RMSE (and per-joint mean
+    sigma for the "distribution" mode) are accumulated so each joint can be
+    reported individually.
+    """
     model.eval()
     total_loss = 0.0
     total_sq_err = 0.0
@@ -75,6 +86,11 @@ def evaluate(
     sigma_count = 0
     num_batches = 0
 
+    # Per-joint accumulators (joints are the last dimension of the targets).
+    per_joint_sq_err: torch.Tensor | None = None
+    per_joint_count: torch.Tensor | None = None
+    per_joint_sigma: torch.Tensor | None = None
+
     for images, joints in loader:
         images = images.to(device, non_blocking=True)
         joints = joints.to(device, non_blocking=True)
@@ -82,15 +98,39 @@ def evaluate(
         if output_mode == "point":
             pred = model(images)
             loss = loss_fn(pred, joints)
-            total_sq_err += ((pred - joints) ** 2).sum().item()
+            # Denormalize to degrees for RMSE reporting.
+            pred_deg = pred * angle_scale
+            joints_deg = joints * angle_scale
+            total_sq_err += ((pred_deg - joints_deg) ** 2).sum().item()
             total_count += joints.numel()
+            sq_err = (pred_deg - joints_deg) ** 2
         else:
             mu, log_sigma = model(images)
             loss = loss_fn(mu, log_sigma, joints)
-            total_sq_err += ((mu - joints) ** 2).sum().item()
+            # Denormalize to degrees for RMSE reporting.
+            mu_deg = mu * angle_scale
+            joints_deg = joints * angle_scale
+            total_sq_err += ((mu_deg - joints_deg) ** 2).sum().item()
             total_count += joints.numel()
             total_sigma += torch.exp(log_sigma).sum().item()
             sigma_count += log_sigma.numel()
+            sq_err = (mu_deg - joints_deg) ** 2
+
+        # Accumulate per-joint squared error (sum over batch dim).
+        joint_sq = sq_err.sum(dim=0)
+        if per_joint_sq_err is None:
+            per_joint_sq_err = joint_sq.detach().cpu()
+            per_joint_count = torch.zeros_like(per_joint_sq_err)
+        else:
+            per_joint_sq_err += joint_sq.detach().cpu()
+        per_joint_count += torch.ones_like(per_joint_sq_err) * joints.shape[0]
+
+        if output_mode == "distribution":
+            joint_sigma = torch.exp(log_sigma).sum(dim=0)
+            if per_joint_sigma is None:
+                per_joint_sigma = joint_sigma.detach().cpu()
+            else:
+                per_joint_sigma += joint_sigma.detach().cpu()
 
         total_loss += loss.item()
         num_batches += 1
@@ -100,6 +140,13 @@ def evaluate(
         metrics["rmse"] = (total_sq_err / total_count) ** 0.5
     if sigma_count > 0:
         metrics["mean_sigma"] = total_sigma / sigma_count
+
+    # Per-joint RMSE (and mean sigma) keyed by joint index.
+    if per_joint_sq_err is not None and per_joint_count is not None:
+        per_joint_rmse = (per_joint_sq_err / per_joint_count.clamp(min=1)) ** 0.5
+        metrics["per_joint_rmse"] = per_joint_rmse.tolist()
+        if per_joint_sigma is not None:
+            metrics["per_joint_sigma"] = (per_joint_sigma / per_joint_count.clamp(min=1)).tolist()
     return metrics
 
 
@@ -174,13 +221,30 @@ def main() -> None:
     print("Loaded model weights from checkpoint.")
 
     loss_fn = build_loss(output_mode, loss_name)
-    metrics = evaluate(model, test_loader, loss_fn, device, output_mode)
+    metrics = evaluate(
+        model,
+        test_loader,
+        loss_fn,
+        device,
+        output_mode,
+        angle_scale=dataloader_cfg.angle_scale,
+    )
 
     print("\n=== Test results ===")
     print(f"  loss      : {metrics['loss']:.4f}")
     print(f"  rmse      : {metrics.get('rmse', float('nan')):.4f}")
     if "mean_sigma" in metrics:
         print(f"  mean sigma: {metrics['mean_sigma']:.4f}")
+
+    # Per-joint breakdown.
+    per_joint_rmse = metrics.get("per_joint_rmse")
+    if per_joint_rmse:
+        per_joint_sigma = metrics.get("per_joint_sigma")
+        print("\n=== Per-joint results ===")
+        print(f"  {'Joint':<8}{'RMSE':>10}{'Mean sigma':>14}")
+        for idx, rmse in enumerate(per_joint_rmse, start=1):
+            sigma_str = f"{per_joint_sigma[idx - 1]:.4f}" if per_joint_sigma else "-"
+            print(f"  {'Joint ' + str(idx):<8}{rmse:>10.4f}{sigma_str:>14}")
 
 
 if __name__ == "__main__":

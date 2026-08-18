@@ -21,6 +21,12 @@ class ModelConfig:
     dropout: float = 0.1
     hidden_dim: int = 256
     backbone_name: str = "dinov3_vitb16"
+    # Feature mode for the regression head:
+    #   "cls"       - use only the CLS token (768-dim). Original behavior.
+    #   "cls_patch" - concatenate the CLS token with the global-average-pooled
+    #                 patch tokens (768 + 768 = 1536-dim). Adds spatial context,
+    #                 which helps pose estimation. Recommended for frozen backbones.
+    feature_mode: str = "cls_patch"
 
 
 DEFAULT_MODEL_CONFIG = ModelConfig()

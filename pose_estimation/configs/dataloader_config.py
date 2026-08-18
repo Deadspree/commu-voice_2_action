@@ -12,6 +12,10 @@ class DataLoaderConfig:
     data_root: str = "dataset/commu_pose_dataset"
     image_size: Tuple[int, int] = (224, 224)
     num_joints: int = 14
+    # Joint angles are normalized by dividing by this scale so targets lie in a
+    # roughly [-1, 1] range (angles span about -180..+90 degrees). The same
+    # scale must be used to denormalize predictions back to degrees.
+    angle_scale: float = 180.0
     split_seed: int = 42
     train_ratio: float = 0.8
     val_ratio: float = 0.1

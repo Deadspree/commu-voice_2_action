@@ -28,6 +28,7 @@ class DINORegressor(nn.Module):
         hidden_dim: int = 256,
         backbone_name: str = "dinov3_vitb16",
         output_mode: str = "point",
+        feature_mode: Optional[str] = None,
         config: Optional[ModelConfig] = None,
     ) -> None:
         super().__init__()
@@ -38,6 +39,9 @@ class DINORegressor(nn.Module):
         self.output_mode = output_mode.lower()
         if self.output_mode not in {"point", "distribution"}:
             raise ValueError("output_mode must be either 'point' or 'distribution'")
+        self.feature_mode = (feature_mode or self.config.feature_mode).lower()
+        if self.feature_mode not in {"cls", "cls_patch"}:
+            raise ValueError("feature_mode must be either 'cls' or 'cls_patch'")
         self.feature_dim = 768
 
         self.backbone = self._build_backbone(
@@ -46,19 +50,26 @@ class DINORegressor(nn.Module):
         )
         self.feature_dim = self._infer_feature_dim()
 
+        # In "cls_patch" mode we concatenate the CLS token with the
+        # global-average-pooled patch tokens, doubling the input dimension.
+        head_input_dim = self.feature_dim
+        if self.feature_mode == "cls_patch":
+            head_input_dim = self.feature_dim * 2
+
+        hidden = hidden_dim if hidden_dim != 256 else self.config.hidden_dim
         if self.output_mode == "point":
             self.regression_head = nn.Sequential(
-                nn.Linear(self.feature_dim, hidden_dim if hidden_dim != 256 else self.config.hidden_dim),
+                nn.Linear(head_input_dim, hidden),
                 nn.ReLU(),
                 nn.Dropout(dropout if dropout != 0.1 else self.config.dropout),
-                nn.Linear(hidden_dim if hidden_dim != 256 else self.config.hidden_dim, self.num_joints),
+                nn.Linear(hidden, self.num_joints),
             )
         else:
             self.regression_head = nn.Sequential(
-                nn.Linear(self.feature_dim, hidden_dim if hidden_dim != 256 else self.config.hidden_dim),
+                nn.Linear(head_input_dim, hidden),
                 nn.ReLU(),
                 nn.Dropout(dropout if dropout != 0.1 else self.config.dropout),
-                nn.Linear(hidden_dim if hidden_dim != 256 else self.config.hidden_dim, self.num_joints * 2),
+                nn.Linear(hidden, self.num_joints * 2),
             )
 
         if freeze_backbone if freeze_backbone is not True else self.config.freeze_backbone:
@@ -153,18 +164,38 @@ class DINORegressor(nn.Module):
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
 
+    def _build_embedding(self, features) -> torch.Tensor:
+        """Build the regression-head input from the backbone features dict.
+
+        - "cls":       return the CLS token only.
+        - "cls_patch": concatenate the CLS token with the global-average-pooled
+                       patch tokens to add spatial context.
+        """
+        if isinstance(features, dict):
+            cls_token = features.get("x_norm_clstoken")
+            patch_tokens = features.get("x_norm_patchtokens")
+        else:
+            cls_token = features
+            patch_tokens = None
+
+        if cls_token is None:
+            raise ValueError("DINOv3 backbone did not return a usable CLS token")
+
+        if self.feature_mode == "cls_patch":
+            if patch_tokens is None:
+                raise ValueError("DINOv3 backbone did not return patch tokens for cls_patch mode")
+            # Global average pooling over the spatial (patch) dimension.
+            pooled_patch = patch_tokens.mean(dim=1)
+            return torch.cat([cls_token, pooled_patch], dim=-1)
+
+        return cls_token
+
     def forward(self, x: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if not isinstance(x, torch.Tensor):
             raise TypeError("Expected image tensor input")
 
         features = self.backbone.forward_features(x)
-        if isinstance(features, dict):
-            embedding = features.get("x_norm_clstoken")
-        else:
-            embedding = features
-
-        if embedding is None:
-            raise ValueError("DINOv3 backbone did not return a usable embedding")
+        embedding = self._build_embedding(features)
 
         outputs = self.regression_head(embedding)
         if self.output_mode == "point":

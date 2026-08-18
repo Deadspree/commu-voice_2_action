@@ -1,11 +1,15 @@
 ./vscode
 __pycache__/
 third_party/dinov3/
+# macOS system files
+.DS_Store
 # Ignore image assets
 *.png
 #Ignore weights
 pose_estimation/weights/*
-
+pose_estimation/checkpoints/*
+# Ignore TensorBoard run logs
+pose_estimation/run/
 # Unity generated folders
 simulation/unity/commu/Library/
 simulation/unity/commu/Temp/

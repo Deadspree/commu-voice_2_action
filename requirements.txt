@@ -1,6 +1,9 @@
-torch==2.13.0
-torchvision==0.28.0
-pillow==12.3.0
+# PyTorch built for CUDA 12.8 (matches NVIDIA driver 570.x, which supports up to CUDA 12.8).
+# The cu128 index tops out at torch 2.11.0 / torchvision 0.26.0.
+# Install with: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+pillow==12.2.0
 numpy==2.4.6
 opencv-python==5.0.0.93
 pytest==9.1.1
@@ -13,3 +16,6 @@ regex
 scikit-learn
 submitit
 termcolor
+
+# Training visualization
+tensorboard
