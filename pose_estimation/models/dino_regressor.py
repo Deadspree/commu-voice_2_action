@@ -29,6 +29,7 @@ class DINORegressor(nn.Module):
         backbone_name: str = "dinov3_vitb16",
         output_mode: str = "point",
         feature_mode: Optional[str] = None,
+        freeze_last_n: Optional[int] = None,
         config: Optional[ModelConfig] = None,
     ) -> None:
         super().__init__()
@@ -72,8 +73,14 @@ class DINORegressor(nn.Module):
                 nn.Linear(hidden, self.num_joints * 2),
             )
 
+        # Determine how much of the backbone to freeze.
+        #   freeze_last_n == 0  -> freeze the entire backbone (full freeze)
+        #   freeze_last_n > 0   -> freeze all but the last N blocks
+        #   freeze_last_n is None -> fall back to the config value
+        if freeze_last_n is None:
+            freeze_last_n = self.config.freeze_last_n
         if freeze_backbone if freeze_backbone is not True else self.config.freeze_backbone:
-            self.freeze_backbone()
+            self.freeze_backbone(freeze_last_n=freeze_last_n)
 
     def _build_backbone(self, *, pretrained_backbone: bool, backbone_weights: Optional[str]) -> nn.Module:
         project_root = Path(__file__).resolve().parents[2]
@@ -160,9 +167,44 @@ class DINORegressor(nn.Module):
             return int(self.backbone.num_features)
         return self.feature_dim
 
-    def freeze_backbone(self) -> None:
+    def freeze_backbone(self, freeze_last_n: int = 0) -> None:
+        """Freeze the backbone, optionally keeping the last N blocks trainable.
+
+        Args:
+            freeze_last_n: Number of final transformer blocks to keep trainable.
+                0 (default) freezes the entire backbone. When > 0, the last N
+                blocks and the final norm layer remain trainable while all
+                earlier layers are frozen.
+        """
+        if freeze_last_n <= 0:
+            for parameter in self.backbone.parameters():
+                parameter.requires_grad = False
+            return
+
+        blocks = getattr(self.backbone, "blocks", None)
+        if blocks is None or len(blocks) == 0:
+            # Fallback: if we can't identify blocks, freeze everything.
+            for parameter in self.backbone.parameters():
+                parameter.requires_grad = False
+            return
+
+        n_blocks = len(blocks)
+        freeze_until = max(0, n_blocks - freeze_last_n)
+
+        # Freeze all parameters first.
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
+
+        # Unfreeze the last N blocks.
+        for block in blocks[freeze_until:]:
+            for parameter in block.parameters():
+                parameter.requires_grad = True
+
+        # Unfreeze the final norm layer (applied after the last block).
+        norm = getattr(self.backbone, "norm", None)
+        if norm is not None:
+            for parameter in norm.parameters():
+                parameter.requires_grad = True
 
     def _build_embedding(self, features) -> torch.Tensor:
         """Build the regression-head input from the backbone features dict.

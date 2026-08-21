@@ -18,9 +18,16 @@ class ModelConfig:
     pretrained_backbone: bool = True
     backbone_weights: str | None = DEFAULT_BACKBONE_WEIGHTS
     freeze_backbone: bool = True
-    dropout: float = 0.1
+    dropout: float = 0.3
     hidden_dim: int = 256
     backbone_name: str = "dinov3_vitb16"
+    # Number of final transformer blocks to keep trainable when the backbone
+    # is partially frozen. 0 = freeze everything (full freeze). When > 0, only
+    # the last N blocks (plus the final norm) are unfrozen, which adapts the
+    # top features to the domain while preserving the pretrained lower layers.
+    # This dramatically reduces overfitting compared to unfreezing the whole
+    # backbone on a small dataset.
+    freeze_last_n: int = 0
     # Feature mode for the regression head:
     #   "cls"       - use only the CLS token (768-dim). Original behavior.
     #   "cls_patch" - concatenate the CLS token with the global-average-pooled

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import torch
 from torch import nn
@@ -23,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from commu_dataloader import create_test_dataloader
+from commu_dataloader import CommuDataset, create_test_dataloader
 from configs.dataloader_config import DataLoaderConfig
 from configs.model_config import ModelConfig
 from models.dino_regressor import DINORegressor
@@ -65,14 +66,15 @@ def evaluate(
     loss_fn,
     device: torch.device,
     output_mode: str,
-    angle_scale: float = 180.0,
+    config: Optional[DataLoaderConfig] = None,
 ) -> dict[str, float]:
     """Evaluate on a loader and return aggregate metrics.
 
-    The dataloader returns normalized joint targets (divided by angle_scale).
-    Predictions and targets are denormalized back to degrees before computing
-    RMSE so the reported metrics are in degrees. The loss is computed on the
-    normalized values (matching training).
+    The dataloader returns per-joint min-max normalized targets in [-1, 1]
+    (each joint's physical [Min, Max] mapped to [-1, 1]). Predictions and
+    targets are denormalized back to degrees before computing RMSE so the
+    reported metrics are in degrees. The loss is computed on the normalized
+    values (matching training).
 
     In addition to the overall loss/RMSE, per-joint RMSE (and per-joint mean
     sigma for the "distribution" mode) are accumulated so each joint can be
@@ -99,8 +101,8 @@ def evaluate(
             pred = model(images)
             loss = loss_fn(pred, joints)
             # Denormalize to degrees for RMSE reporting.
-            pred_deg = pred * angle_scale
-            joints_deg = joints * angle_scale
+            pred_deg = CommuDataset.denormalize_joints(pred, config)
+            joints_deg = CommuDataset.denormalize_joints(joints, config)
             total_sq_err += ((pred_deg - joints_deg) ** 2).sum().item()
             total_count += joints.numel()
             sq_err = (pred_deg - joints_deg) ** 2
@@ -108,8 +110,8 @@ def evaluate(
             mu, log_sigma = model(images)
             loss = loss_fn(mu, log_sigma, joints)
             # Denormalize to degrees for RMSE reporting.
-            mu_deg = mu * angle_scale
-            joints_deg = joints * angle_scale
+            mu_deg = CommuDataset.denormalize_joints(mu, config)
+            joints_deg = CommuDataset.denormalize_joints(joints, config)
             total_sq_err += ((mu_deg - joints_deg) ** 2).sum().item()
             total_count += joints.numel()
             total_sigma += torch.exp(log_sigma).sum().item()
@@ -227,7 +229,7 @@ def main() -> None:
         loss_fn,
         device,
         output_mode,
-        angle_scale=dataloader_cfg.angle_scale,
+        config=dataloader_cfg,
     )
 
     print("\n=== Test results ===")
@@ -240,11 +242,25 @@ def main() -> None:
     per_joint_rmse = metrics.get("per_joint_rmse")
     if per_joint_rmse:
         per_joint_sigma = metrics.get("per_joint_sigma")
+        # Each joint has a different physical range, so report the RMSE both in
+        # degrees and as a percentage of that joint's full [Min, Max] range.
+        # This makes errors comparable across joints with very different ranges
+        # (e.g. FaceYaw +/-10 deg vs RightArmPitch -180..0 deg).
+        limits = dataloader_cfg.joint_limits
         print("\n=== Per-joint results ===")
-        print(f"  {'Joint':<8}{'RMSE':>10}{'Mean sigma':>14}")
+        print(f"  {'Joint':<10}{'Range':>12}{'RMSE':>10}{'% of range':>12}{'Mean sigma':>14}")
         for idx, rmse in enumerate(per_joint_rmse, start=1):
+            lo, hi = limits[idx - 1]
+            span = hi - lo
+            pct = (rmse / span * 100.0) if span > 0 else float("nan")
             sigma_str = f"{per_joint_sigma[idx - 1]:.4f}" if per_joint_sigma else "-"
-            print(f"  {'Joint ' + str(idx):<8}{rmse:>10.4f}{sigma_str:>14}")
+            print(
+                f"  {'Joint ' + str(idx):<10}"
+                f"{f'[{lo:.0f}, {hi:.0f}]':>12}"
+                f"{rmse:>10.4f}"
+                f"{pct:>11.2f}%"
+                f"{sigma_str:>14}"
+            )
 
 
 if __name__ == "__main__":

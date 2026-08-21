@@ -21,6 +21,10 @@ public class CS_RandomMotion : MonoBehaviour
     public int maxRandomPoses = 0;
     public float minVelocity = 10f;
     public float maxVelocity = 80f;
+    [Tooltip("When true, goals are biased toward the extremes of each joint's range (uniform sampling under-represents the tails).")]
+    public bool biasToExtremes = true;
+    [Tooltip("Chance (0..1) that a biased goal lands at the extreme vs. uniform.")]
+    [Range(0f, 1f)] public float extremeBias = 0.5f;
     public bool startOnAwake = false;
     public KeyCode toggleKey = KeyCode.R;
 
@@ -126,7 +130,7 @@ public class CS_RandomMotion : MonoBehaviour
             if (target != null)
             {
                 int k = Mathf.Clamp(jointsPerEvent, 1, jointCount);
-                var task = SendRandomGestureOnce(jointCount);
+                var task = SendRandomGestureOnce(jointCount, k);
                 // wait until the gesture Task completes and actual motion finishes
                 while ((task != null && !task.IsCompleted) || (target != null && target.IsMoving()))
                     yield return null;
@@ -177,17 +181,18 @@ public class CS_RandomMotion : MonoBehaviour
             Debug.LogWarning("CS_RandomMotion.TriggerOnce: target is null");
             return;
         }
-        StartCoroutine(TriggerOnceRoutine(jointCount));
+        int k = Mathf.Clamp(jointsPerEvent, 1, jointCount);
+        StartCoroutine(TriggerOnceRoutine(jointCount, k));
     }
 
-    IEnumerator TriggerOnceRoutine(int jointCount)
+    IEnumerator TriggerOnceRoutine(int jointCount, int k)
     {
         if (dataCollector != null)
         {
             dataCollector.PauseAutoCapture();
         }
 
-        var task = SendRandomGestureOnce(jointCount);
+        var task = SendRandomGestureOnce(jointCount, k);
         while ((task != null && !task.IsCompleted) || (target != null && target.IsMoving()))
             yield return null;
 
@@ -200,35 +205,60 @@ public class CS_RandomMotion : MonoBehaviour
         }
     }
 
-    System.Threading.Tasks.Task SendRandomGestureOnce(int jointCount)
+    System.Threading.Tasks.Task SendRandomGestureOnce(int jointCount, int k)
     {
-        int k = Mathf.Clamp(jointsPerEvent, 1, jointCount);
         float[] sleep_list = new float[k];
         float[] velocity_list = new float[k];
         int[] index_list = new int[k];
         float[] goal_list = new float[k];
 
-        var chosen = new HashSet<int>();
+        // Guaranteed-distinct joint indices (Fisher-Yates style pick from a pool).
+        var pool = new List<int>();
+        for (int i = 0; i < jointCount; i++) pool.Add(i);
         for (int i = 0; i < k; i++)
         {
-            int idx;
-            int tries = 0;
-            do
-            {
-                idx = Random.Range(0, jointCount);
-                tries++;
-            } while (chosen.Contains(idx) && tries < 10);
+            int pick = Random.Range(0, pool.Count);
+            int idx = pool[pick];
+            pool.RemoveAt(pick);
 
-            chosen.Add(idx);
             index_list[i] = idx;
             sleep_list[i] = 0f;
             velocity_list[i] = Random.Range(minVelocity, maxVelocity);
 
             var limit = CS_JointLimitDefinition.DefaultLimits[idx];
-            goal_list[i] = Random.Range(limit.Min, limit.Max);
+            // Randomize the desired FINAL joint angle in [Min, Max], then
+            // invert the JointOffset/JointInverse transform that Gesture() applies,
+            // so the effective goal covers the full range (e.g. arm pitch -180..0,
+            // not compressed to -90..0 by JointOffset=90).
+            float desired = RandomGoal(limit.Min, limit.Max);
+            goal_list[i] = InverseTransformGoal(idx, desired);
         }
 
         Debug.Log($"CS_RandomMotion: sending Gesture k={k} indices=[{string.Join(",", index_list)}] goals=[{string.Join(",", goal_list)}]");
         return target.Gesture(sleep_list, velocity_list, index_list, goal_list);
+    }
+
+    // Invert: final_goal = (goal + offset) * inverse  =>  goal = final_goal / inverse - offset
+    float InverseTransformGoal(int index, float finalGoal)
+    {
+        float offset = target != null ? target.JointOffset[index] : 0f;
+        int inverse = target != null ? target.JointInverse[index] : 1;
+        if (inverse == 0)
+        {
+            // Division by zero guard: cannot invert; just return raw goal.
+            return finalGoal;
+        }
+        return finalGoal / inverse - offset;
+    }
+
+    // Pick a goal, optionally biased toward the extremes of the joint's range.
+    float RandomGoal(float min, float max)
+    {
+        if (biasToExtremes && Random.value < extremeBias)
+        {
+            // Land at (or very near) one of the two extremes.
+            return Random.value < 0.5f ? min : max;
+        }
+        return Random.Range(min, max);
     }
 }

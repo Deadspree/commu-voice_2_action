@@ -75,10 +75,35 @@ class CommuDataset(Dataset[Tuple[torch.Tensor, torch.Tensor]]):
         if self.transform is not None:
             image = self.transform(image)
 
-        # Normalize joint angles to roughly [-1, 1] by dividing by angle_scale.
-        # The same scale must be used to denormalize predictions back to degrees.
-        joint_tensor = torch.tensor(joint_values, dtype=torch.float32) / self.config.angle_scale
+        # Per-joint min-max normalization to [-1, 1] using the physical joint
+        # limits. Joints have very different ranges (e.g. FaceYaw is +/-10 deg
+        # while RightArmPitch is -180..+5 deg), so a single global mean/std
+        # would compress small-range joints and let large-range joints dominate
+        # the loss. Mapping each joint's [Min, Max] to [-1, 1] equalizes all
+        # outputs to a common scale. Denormalization back to degrees is:
+        #   angle = (norm + 1) * (max - min) / 2 + min
+        joint_tensor = torch.tensor(joint_values, dtype=torch.float32)
+        joint_tensor = self._normalize_joints(joint_tensor)
         return image, joint_tensor
+
+    def _normalize_joints(self, joints: torch.Tensor) -> torch.Tensor:
+        """Map each joint's [Min, Max] physical range to [-1, 1]."""
+        limits = torch.tensor(
+            self.config.joint_limits, dtype=torch.float32, device=joints.device
+        )
+        mins = limits[:, 0]
+        maxs = limits[:, 1]
+        # (angle - min) / (max - min) -> [0, 1], then * 2 - 1 -> [-1, 1].
+        return 2.0 * (joints - mins) / (maxs - mins) - 1.0
+
+    @staticmethod
+    def denormalize_joints(norm_joints: torch.Tensor, config: Optional[DataLoaderConfig] = None) -> torch.Tensor:
+        """Inverse of _normalize_joints: map [-1, 1] back to degrees."""
+        cfg = config or DEFAULT_DATALOADER_CONFIG
+        limits = torch.tensor(cfg.joint_limits, dtype=torch.float32, device=norm_joints.device)
+        mins = limits[:, 0]
+        maxs = limits[:, 1]
+        return (norm_joints + 1.0) * (maxs - mins) / 2.0 + mins
 
     @staticmethod
     def _resolve_labels_path(data_root: Path) -> Path:
@@ -170,9 +195,25 @@ class CommuDataset(Dataset[Tuple[torch.Tensor, torch.Tensor]]):
         """
         cfg = config or DEFAULT_DATALOADER_CONFIG
         if split == "train":
+            # Use RandomResizedCrop (random crop + resize) when enabled,
+            # otherwise a plain Resize (same as val/test). RRC is a strong
+            # augmentation; disable it (train_use_rrc=False) if you want the
+            # model to see the full image, e.g. when the pretrained weights
+            # are the real bottleneck rather than augmentation.
+            resize_or_crop = (
+                T.RandomResizedCrop(
+                    size=image_size,
+                    scale=cfg.train_rrc_scale,
+                    ratio=cfg.train_rrc_ratio,
+                    interpolation=InterpolationMode.BILINEAR,
+                )
+                if cfg.train_use_rrc
+                else T.Resize(image_size, interpolation=InterpolationMode.BILINEAR)
+            )
             transform = T.Compose(
                 [
-                    T.Resize(image_size, interpolation=InterpolationMode.BILINEAR),
+                    resize_or_crop,
+                    T.RandomHorizontalFlip(p=cfg.train_hflip_prob),
                     T.RandomAffine(
                         degrees=0,
                         translate=cfg.train_affine_translate,

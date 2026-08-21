@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -32,7 +33,7 @@ POSE_ESTIMATION_DIR = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT_DIR = POSE_ESTIMATION_DIR / "checkpoints"
 DEFAULT_RUN_DIR = POSE_ESTIMATION_DIR / "run"
 
-from commu_dataloader import create_train_dataloader, create_val_dataloader
+from commu_dataloader import CommuDataset, create_train_dataloader, create_val_dataloader
 from configs.dataloader_config import DataLoaderConfig
 from configs.model_config import ModelConfig
 from models.dino_regressor import DINORegressor
@@ -126,8 +127,15 @@ def evaluate(
     device: torch.device,
     output_mode: str,
     use_amp: bool = False,
+    config: Optional[DataLoaderConfig] = None,
 ) -> dict[str, float]:
-    """Evaluate on a loader and return average loss and RMSE (point mode only)."""
+    """Evaluate on a loader and return average loss and RMSE (point mode only).
+
+    The dataloader returns per-joint min-max normalized targets in [-1, 1].
+    The loss is computed on the normalized values (matching training), but the
+    RMSE is denormalized back to degrees so the reported metric is in the same
+    units as the standalone evaluate.py.
+    """
     model.eval()
     total_loss = 0.0
     total_sq_err = 0.0
@@ -142,12 +150,18 @@ def evaluate(
             if output_mode == "point":
                 pred = model(images)
                 loss = loss_fn(pred, joints)
-                total_sq_err += ((pred - joints) ** 2).sum().item()
+                # Denormalize to degrees for RMSE reporting.
+                pred_deg = CommuDataset.denormalize_joints(pred, config)
+                joints_deg = CommuDataset.denormalize_joints(joints, config)
+                total_sq_err += ((pred_deg - joints_deg) ** 2).sum().item()
                 total_count += joints.numel()
             else:
                 mu, log_sigma = model(images)
                 loss = loss_fn(mu, log_sigma, joints)
-                total_sq_err += ((mu - joints) ** 2).sum().item()
+                # Denormalize to degrees for RMSE reporting.
+                mu_deg = CommuDataset.denormalize_joints(mu, config)
+                joints_deg = CommuDataset.denormalize_joints(joints, config)
+                total_sq_err += ((mu_deg - joints_deg) ** 2).sum().item()
                 total_count += joints.numel()
 
         total_loss += loss.item()
@@ -166,21 +180,83 @@ def save_checkpoint(
     path: Path,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
+    scheduler: object | None,
     epoch: int,
     best_val_loss: float,
     config: dict,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "best_val_loss": best_val_loss,
-            "config": config,
-        },
-        path,
+    state = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "best_val_loss": best_val_loss,
+        "config": config,
+    }
+    if scheduler is not None:
+        state["scheduler_state_dict"] = scheduler.state_dict()
+    torch.save(state, path)
+
+
+def build_optimizer(
+    model: nn.Module,
+    *,
+    head_lr: float,
+    backbone_lr: float,
+    weight_decay: float,
+) -> tuple[torch.optim.Optimizer, list, list, float, float]:
+    """Group model parameters into backbone/head and return an AdamW optimizer.
+
+    The backbone is a pretrained DINOv3 and should be fine-tuned gently (low
+    LR), while the head can train faster. Frozen backbone params have
+    requires_grad=False, so they are simply excluded from gradients.
+    """
+    backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
+    head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": backbone_params, "lr": backbone_lr},
+            {"params": head_params, "lr": head_lr},
+        ],
+        weight_decay=weight_decay,
     )
+    return optimizer, backbone_params, head_params, backbone_lr, head_lr
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    *,
+    kind: str,
+    epochs: int,
+    warmup_epochs: int,
+    plateau_patience: int,
+) -> object | None:
+    """Build an LR scheduler.
+
+    - "cosine":  linear warmup (optional) followed by cosine annealing to ~0.
+                  Recommended for long runs; prevents late-training oscillation.
+    - "plateau": ReduceLROnPlateau on validation loss.
+    - "none":    constant LR (returns None).
+    """
+    if kind == "none":
+        return None
+
+    if kind == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=plateau_patience, min_lr=1e-7,
+        )
+
+    # cosine (default)
+    warmup = max(0, warmup_epochs)
+    total = max(1, epochs - warmup)
+
+    def lr_lambda(epoch: int) -> float:
+        if warmup > 0 and epoch < warmup:
+            return (epoch + 1) / warmup
+        progress = min((epoch - warmup) / total, 1.0)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 
 # --------------------------------------------------------------------------- #
@@ -194,7 +270,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--backbone-lr", type=float, default=None, help="Learning rate for the backbone. Defaults to --lr if not set. Use a low value (e.g. 1e-5) when unfreezing the backbone.")
+    parser.add_argument("--head-lr", type=float, default=None, help="Learning rate for the regression head. Defaults to --lr if not set. When unfreezing the backbone, lower this (e.g. 1e-4) so the head stays stable while the backbone features shift.")
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--scheduler", type=str, default="cosine", choices=["cosine", "plateau", "none"], help="LR schedule: 'cosine' anneals to 0 (default), 'plateau' reduces on validation-loss plateau, 'none' keeps LR constant.")
+    parser.add_argument("--warmup-epochs", type=int, default=0, help="Linear LR warmup over the first N epochs (cosine schedule only).")
+    parser.add_argument("--plateau-patience", type=int, default=10, help="Epochs without val-loss improvement before 'plateau' reduces LR.")
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto", help="auto, cpu, or cuda")
@@ -208,6 +289,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", type=str, default=None, help="Path to a checkpoint to resume from.")
     parser.add_argument("--load-weights", type=str, default=None, help="Path to a checkpoint to load ONLY model weights from (no optimizer state, no epoch). Useful for fine-tuning from a pretrained checkpoint.")
     parser.add_argument("--unfreeze-backbone", action="store_true", help="Unfreeze the backbone so its weights are trained too. By default the backbone is frozen.")
+    parser.add_argument("--freeze-last-n", type=int, default=None, help="When unfreezing, keep only the last N transformer blocks trainable (e.g. 4). 0 or unset freezes the whole backbone. Reduces overfitting on small datasets.")
     parser.add_argument("--log-interval", type=int, default=10, help="Log every N batches during training.")
     return parser.parse_args()
 
@@ -261,15 +343,34 @@ def main() -> None:
         hidden_dim=model_cfg.hidden_dim,
         backbone_name=model_cfg.backbone_name,
         output_mode=args.output_mode,
+        freeze_last_n=args.freeze_last_n,
         config=model_cfg,
     ).to(device)
 
     loss_fn = build_loss(args.output_mode, args.loss)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
+
+    # Independent learning rates for the backbone and the regression head.
+    # When unfreezing the backbone, keep the head LR low (e.g. 1e-4) so the
+    # head stays stable while the backbone's features shift underneath it.
+    head_lr = args.head_lr if args.head_lr is not None else args.lr
+    backbone_lr = args.backbone_lr if args.backbone_lr is not None else head_lr
+    optimizer, backbone_params, head_params, backbone_lr, head_lr = build_optimizer(
+        model,
+        head_lr=head_lr,
+        backbone_lr=backbone_lr,
         weight_decay=args.weight_decay,
     )
+    print(f"Optimizer: backbone_lr={backbone_lr}, head_lr={head_lr}, "
+          f"backbone_params={len(backbone_params)}, head_params={len(head_params)}")
+
+    scheduler = build_scheduler(
+        optimizer,
+        kind=args.scheduler,
+        epochs=args.epochs,
+        warmup_epochs=args.warmup_epochs,
+        plateau_patience=args.plateau_patience,
+    )
+    print(f"Scheduler: {args.scheduler or 'none'}" + (f" (warmup {args.warmup_epochs} epochs)" if args.warmup_epochs > 0 else ""))
 
     # Mixed precision: use a GradScaler only for fp16 (CUDA). On MPS/bf16 the
     # scaler is unnecessary, so we keep it None unless AMP is enabled on CUDA.
@@ -309,6 +410,8 @@ def main() -> None:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if scheduler is not None and "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         start_epoch = ckpt.get("epoch", 0) + 1
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         print(f"Resumed from {args.resume} at epoch {start_epoch}")
@@ -331,8 +434,14 @@ def main() -> None:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "lr": args.lr,
+        "head_lr": head_lr,
+        "backbone_lr": backbone_lr,
+        "scheduler": args.scheduler,
+        "warmup_epochs": args.warmup_epochs,
+        "plateau_patience": args.plateau_patience,
         "weight_decay": args.weight_decay,
         "seed": args.seed,
+        "freeze_last_n": args.freeze_last_n,
         "model": model_cfg.__dict__,
         "dataloader": dataloader_cfg.__dict__,
     }
@@ -346,7 +455,7 @@ def main() -> None:
         elapsed = time.time() - epoch_start
 
         if (epoch + 1) % args.validate_every == 0:
-            val_metrics = evaluate(model, val_loader, loss_fn, device, args.output_mode, use_amp=args.amp)
+            val_metrics = evaluate(model, val_loader, loss_fn, device, args.output_mode, use_amp=args.amp, config=dataloader_cfg)
             val_loss = val_metrics["loss"]
             rmse_str = f", rmse={val_metrics.get('rmse', float('nan')):.4f}" if "rmse" in val_metrics else ""
             print(
@@ -369,11 +478,16 @@ def main() -> None:
                     best_ckpt_path,
                     model,
                     optimizer,
+                    scheduler,
                     epoch,
                     best_val_loss,
                     config_snapshot,
                 )
                 print(f"  -> saved best checkpoint (val_loss={best_val_loss:.4f})")
+
+            # Plateau scheduler keys off validation loss.
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_loss)
         else:
             print(
                 f"Epoch {epoch + 1}/{args.epochs} | "
@@ -383,10 +497,16 @@ def main() -> None:
             # Log train loss even on non-validation epochs.
             writer.add_scalar("loss/train", train_loss, epoch)
 
+        # Cosine / LambdaLR steps exactly once per epoch. Plateau is stepped
+        # on validation loss inside the validate branch above.
+        if scheduler is not None and not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step()
+
         save_checkpoint(
             last_ckpt_path,
             model,
             optimizer,
+            scheduler,
             epoch,
             best_val_loss,
             config_snapshot,
