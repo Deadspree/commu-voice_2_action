@@ -10,7 +10,7 @@ class DataLoaderConfig:
     """Configuration for data loading, augmentation, and dataset splitting."""
 
     data_root: str = "dataset/commu_pose_dataset"
-    image_size: Tuple[int, int] = (224, 224)
+    image_size: Tuple[int, int] = (384, 384)
     num_joints: int = 14
     # Per-joint min-max normalization to [-1, 1] using the physical joint
     # limits (from CS_JointLimitDefinition.cs). Joints have very different

@@ -21,8 +21,8 @@ set -euo pipefail
 # --------------------------------------------------------------------------- #
 # Connection settings (edit these)
 # --------------------------------------------------------------------------- #
-RUNPOD_HOST="194.68.245.56"
-RUNPOD_PORT="22107"
+RUNPOD_HOST="194.68.245.95"
+RUNPOD_PORT="22078"
 RUNPOD_USER="root"
 SSH_KEY="$HOME/.ssh/minhle"
 

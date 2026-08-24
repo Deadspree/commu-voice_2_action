@@ -19,7 +19,7 @@ class ModelConfig:
     backbone_weights: str | None = DEFAULT_BACKBONE_WEIGHTS
     freeze_backbone: bool = True
     dropout: float = 0.3
-    hidden_dim: int = 256
+    hidden_dim: int = 512
     backbone_name: str = "dinov3_vitb16"
     # Number of final transformer blocks to keep trainable when the backbone
     # is partially frozen. 0 = freeze everything (full freeze). When > 0, only
