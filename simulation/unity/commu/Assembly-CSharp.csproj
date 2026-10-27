@@ -43,7 +43,7 @@
     <UnityVersion>6000.5.5f1</UnityVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Analyzer Include="/Users/lequangminh/.vscode/extensions/visualstudiotoolsforunity.vstuc-1.3.1/Analyzers/Microsoft.Unity.Analyzers.dll" />
+    <Analyzer Include="/Users/lequangminh/.vscode/extensions/visualstudiotoolsforunity.vstuc-1.3.2/Analyzers/Microsoft.Unity.Analyzers.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.5.5f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.SourceGenerators.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.5.5f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.Properties.SourceGenerator.dll" />
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.5.5f1/Unity.app/Contents/Resources/BuildPipeline/Unity.SourceGenerators/Unity.UIToolkit.SourceGenerator.dll" />
@@ -64,6 +64,7 @@
     <Compile Include="Assets/CommU/CS/CS_TestRotateBone.cs" />
     <Compile Include="Assets/TutorialInfo/Scripts/Readme.cs" />
     <Compile Include="Assets/CommU/CS/CS_JointLimitDefinition.cs" />
+    <Compile Include="Assets/CommU/CS/CS_MediaPipeReceiver.cs" />
     <Compile Include="Assets/CommU/CS/CS_Operation.cs" />
     <Compile Include="Assets/CommU/CS/CS_Target.cs" />
     <Compile Include="Assets/CommU/CS/CS_TestRotateBones.cs" />

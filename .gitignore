@@ -14,3 +14,15 @@ pose_estimation/run/
 simulation/unity/commu/Library/
 simulation/unity/commu/Temp/
 simulation/unity/commu/Logs/
+# Local motion tracking models and recordings
+motion_tracking/models/*.task
+motion_tracking/models/*.part
+motion_tracking/recordings/
+# Local secrets, video pipeline environments, and generated media
+.env
+.env.*
+!.env.example
+dataset/lucy/
+# Keep the supplied, reusable robot reference despite the general PNG rule.
+!video_generation/robot_references/*.png
+.env

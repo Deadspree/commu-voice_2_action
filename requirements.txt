@@ -5,7 +5,9 @@ torch==2.11.0+cu128
 torchvision==0.26.0+cu128
 pillow==12.2.0
 numpy==2.4.6
-opencv-python==5.0.0.93
+# MediaPipe requires the contrib distribution; install only one cv2 package.
+opencv-contrib-python==5.0.0.93
+mediapipe==1.1.1
 pytest==9.1.1
 matplotlib
 # DINOv3 backbone dependencies
@@ -19,3 +21,7 @@ termcolor
 
 # Training visualization
 tensorboard
+
+# Lucy batch video generation (install FFmpeg + ffprobe in the same Conda environment)
+requests>=2.32.3,<3
+python-dotenv>=1.0.1,<2

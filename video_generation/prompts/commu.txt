@@ -1,0 +1,1 @@
+Substitute the person in the video with the CommU robot from the reference image, matching its rounded beige head, large dark eyes, white torso, and articulated arms. Preserve the performance timing, head movements, arm gestures, and speaking mouth movements.

@@ -1,0 +1,91 @@
+{
+  "source_video": "/Users/lequangminh/Documents/Works/commu-voice_2_action/dataset/commu_pose_dataset/test_video/video-test.mp4",
+  "checkpoint": "/Users/lequangminh/Documents/Works/commu-voice_2_action/pose_estimation/checkpoints/pose_estimation.pt",
+  "checkpoint_epoch": 157,
+  "fps": 17.92219777642377,
+  "frame_count": 1406,
+  "reported_frame_count": 1414,
+  "width": 1280,
+  "height": 720,
+  "duration_seconds": 78.919,
+  "timestamp_fallback_frames": 1,
+  "joint_names": [
+    "BodyYaw",
+    "BodyPitch",
+    "RightArmPitch",
+    "RightArmRoll",
+    "LeftArmPitch",
+    "LeftArmRoll",
+    "FacePitch",
+    "FaceYaw",
+    "FaceRoll",
+    "EyePitch",
+    "RightEyeYaw",
+    "LeftEyeYaw",
+    "Eyelid",
+    "Mouth"
+  ],
+  "angle_units": "degrees",
+  "predictions": "raw_unclamped",
+  "output_mode": "point",
+  "joint_limits": [
+    [
+      -20.0,
+      20.0
+    ],
+    [
+      -40.0,
+      40.0
+    ],
+    [
+      -180.0,
+      0.0
+    ],
+    [
+      -30.0,
+      15.0
+    ],
+    [
+      -180.0,
+      0.0
+    ],
+    [
+      -15.0,
+      30.0
+    ],
+    [
+      -12.0,
+      12.0
+    ],
+    [
+      -10.0,
+      10.0
+    ],
+    [
+      -20.0,
+      20.0
+    ],
+    [
+      -20.0,
+      20.0
+    ],
+    [
+      -30.0,
+      30.0
+    ],
+    [
+      -30.0,
+      30.0
+    ],
+    [
+      0.0,
+      30.0
+    ],
+    [
+      -40.0,
+      40.0
+    ]
+  ],
+  "independent_ffprobe_frame_count": 1406,
+  "independent_ffprobe_duration_seconds": 78.9023
+}

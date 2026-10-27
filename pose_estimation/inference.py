@@ -1,17 +1,21 @@
 """Inference script for the CommU DINOv3 joint-angle regressor.
 
-Loads a trained checkpoint and runs inference on a single image (or a
-directory of images), returning the predicted joint angles in degrees.
+Loads a trained checkpoint and predicts joint angles from images or every
+frame of a video. Video output includes timestamps for Unity CSV playback.
 
 Usage examples:
   python pose_estimation/inference.py --image path/to/image.png
   python pose_estimation/inference.py --image path/to/image.png --checkpoint pose_estimation.pt
   python pose_estimation/inference.py --image path/to/folder --output-mode distribution
+  python pose_estimation/inference.py --video path/to/video.mp4
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import json
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -97,6 +101,7 @@ def predict(
     limits = torch.tensor(
         (config or DataLoaderConfig()).joint_limits,
         dtype=torch.float32,
+        device=sigma.device,
     )
     span = limits[:, 1] - limits[:, 0]
     sigma_deg = sigma * (span / 2.0)
@@ -105,7 +110,12 @@ def predict(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run inference with the CommU DINOv3 joint-angle regressor.")
-    parser.add_argument("--image", type=str, required=True, help="Path to an image file or a directory of images.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--image", type=str, help="Path to an image file or a directory of images.")
+    source.add_argument("--video", type=str, help="Video to predict frame by frame, preserving timestamps.")
+    parser.add_argument("--output", type=str, help="Video joint CSV destination; defaults to VIDEO_STEM_joints.csv beside the video.")
+    parser.add_argument("--batch-size", type=int, default=8, help="Video inference batch size (default: 8).")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing video prediction CSV.")
     parser.add_argument("--checkpoint", type=str, default=DEFAULT_CHECKPOINT, help=f"Path to a saved checkpoint (.pt). Defaults to '{DEFAULT_CHECKPOINT}'.")
     parser.add_argument("--output-mode", type=str, default=None, choices=["point", "distribution"], help="Output mode. Defaults to the mode stored in the checkpoint.")
     parser.add_argument("--device", type=str, default="auto", help="auto, cpu, or cuda")
@@ -121,6 +131,128 @@ def resolve_device(device: str) -> torch.device:
             return torch.device("mps")
         return torch.device("cpu")
     return torch.device(device)
+
+
+def resolve_video_timestamps(raw: list[float], fps: float) -> tuple[list[float], int]:
+    """Repair bad decoder timestamps locally without shifting later valid frames."""
+    result = []
+    repairs = 0
+    index = 0
+    while index < len(raw):
+        previous = result[-1] if result else -1.0 / fps
+        value = raw[index]
+        if math.isfinite(value) and value >= 0 and value > previous:
+            result.append(value)
+            index += 1
+            continue
+        end = index + 1
+        while end < len(raw) and not (math.isfinite(raw[end]) and raw[end] >= 0 and raw[end] > previous):
+            end += 1
+        step = (raw[end] - previous) / (end - index + 1) if end < len(raw) else 1.0 / fps
+        result.extend(previous + step * (j + 1) for j in range(end - index))
+        repairs += end - index
+        index = end
+    return result, repairs
+
+
+def predict_video(model, video_path: Path, output_path: Path, transform, device,
+                  output_mode: str, config: DataLoaderConfig, batch_size: int,
+                  checkpoint_path: Path, overwrite: bool = False) -> None:
+    """Export frame_index,timestamp_seconds,14 raw joint angles for Unity playback."""
+    import cv2
+
+    if batch_size < 1:
+        raise ValueError("--batch-size must be at least 1")
+    if not video_path.is_file():
+        raise FileNotFoundError(video_path)
+    if output_path.resolve() == video_path.resolve():
+        raise ValueError("Output must not overwrite the input video")
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}; use --overwrite to replace it")
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = output_path.with_suffix(output_path.suffix + ".partial")
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    count = 0
+    batch, timestamps = [], []
+
+    try:
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError("Video has no valid frame rate for timestamp fallback")
+        # Read only timing first, so a broken timestamp can be interpolated
+        # against its neighbors instead of causing cumulative timing drift.
+        raw_timestamps = []
+        while True:
+            ok, _ = capture.read()
+            if not ok:
+                break
+            raw_timestamps.append(capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0)
+        frame_times, fallback_count = resolve_video_timestamps(raw_timestamps, fps)
+        capture.release()
+        capture = cv2.VideoCapture(str(video_path))
+        if not capture.isOpened():
+            raise ValueError(f"Cannot reopen video: {video_path}")
+        with partial.open("w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["frame_index", "timestamp_seconds", *JOINT_NAMES])
+
+            def flush_batch():
+                nonlocal count
+                if not batch:
+                    return
+                angles, _ = predict(model, torch.stack(batch), device, output_mode, config)
+                angles = angles.reshape(-1, len(JOINT_NAMES))
+                if not torch.isfinite(angles).all():
+                    raise ValueError(f"Non-finite predictions near frame {count}")
+                for timestamp, values in zip(timestamps, angles.tolist()):
+                    writer.writerow([count, f"{timestamp:.9f}", *[f"{v:.6f}" for v in values]])
+                    count += 1
+                batch.clear()
+                timestamps.clear()
+                if count % (batch_size * 4) == 0:
+                    print(f"Predicted {count}/{total or '?'} frames", flush=True)
+
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                index = count + len(batch)
+                if index >= len(frame_times):
+                    raise ValueError("Decoded frame count changed between timing and inference passes")
+                timestamp = frame_times[index]
+                image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                batch.append(transform(image))
+                timestamps.append(timestamp)
+                if len(batch) == batch_size:
+                    flush_batch()
+            flush_batch()
+        if count == 0:
+            raise ValueError("No video frames decoded")
+        if count != len(frame_times):
+            raise ValueError("Decoded frame count changed between timing and inference passes")
+        if total > 0 and count != total:
+            print(f"Warning: decoded {count} frames; container reported {total}. "
+                  "Frame-count metadata can be approximate; verify the source if unexpected.", flush=True)
+        last_interval = frame_times[-1] - frame_times[-2] if count > 1 else 1.0 / fps
+        metadata = {
+            "source_video": str(video_path.resolve()), "checkpoint": str(checkpoint_path.resolve()),
+            "fps": fps, "frame_count": count, "reported_frame_count": total,
+            "width": width, "height": height,
+            "duration_seconds": frame_times[-1] + last_interval,
+            "timestamp_fallback_frames": fallback_count, "joint_names": JOINT_NAMES,
+            "angle_units": "degrees", "predictions": "raw_unclamped", "output_mode": output_mode,
+            "joint_limits": config.joint_limits,
+        }
+        partial.replace(output_path)
+        output_path.with_suffix(".metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        print(f"Saved {count} frames to {output_path} ({metadata['duration_seconds']:.3f}s)", flush=True)
+    finally:
+        capture.release()
 
 
 def main() -> None:
@@ -160,6 +292,13 @@ def main() -> None:
     print("Loaded model weights from checkpoint.")
 
     transform = build_inference_transform(dataloader_cfg.image_size)
+
+    if args.video:
+        video_path = Path(args.video)
+        output_path = Path(args.output) if args.output else video_path.with_name(video_path.stem + "_joints.csv")
+        predict_video(model, video_path, output_path, transform, device, output_mode,
+                      dataloader_cfg, args.batch_size, checkpoint_path, args.overwrite)
+        return
 
     image_path = Path(args.image)
     if image_path.is_dir():

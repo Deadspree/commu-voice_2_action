@@ -1,0 +1,6 @@
+{
+  "model": "lucy-2.6",
+  "resolution": "720p",
+  "poll_interval_seconds": 5,
+  "poll_timeout_seconds": 900
+}

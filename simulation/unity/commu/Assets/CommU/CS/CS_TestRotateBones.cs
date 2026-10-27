@@ -33,10 +33,50 @@ public class CS_TestRotateBones : MonoBehaviour
 	// Playback support
 	private Coroutine _playbackRoutine;
 	public float playbackSampleInterval = 1.0f;
+	[Min(0.01f)] public float playbackSpeed = 1.0f;
 	private bool _isPlayingBack = false;
+	public int PlaybackFrame { get; private set; }
+	public int PlaybackFrameCount { get; private set; }
+
+	private class PlaybackSample
+	{
+		public int Id;
+		public double Time;
+		public float[] Angles;
+	}
 
 	// Simple CSV pose storage: map sample index -> joint angles
 	private System.Collections.Generic.Dictionary<int, float[]> _posesById = new System.Collections.Generic.Dictionary<int, float[]>();
+	public bool ExternalControl { get; private set; }
+	private int motionGeneration;
+
+	public bool BeginExternalControl()
+	{
+		if (ExternalControl) return false;
+		StopPlayback();
+		motionGeneration++;
+		System.Array.Clear(MoveFlag, 0, MoveFlag.Length);
+		ExternalControl = true;
+		return true;
+	}
+
+	public void EndExternalControl()
+	{
+		motionGeneration++;
+		System.Array.Clear(MoveFlag, 0, MoveFlag.Length);
+		ExternalControl = false;
+	}
+
+	public void ApplyExternalPose(float[] angles)
+	{
+		if (!ExternalControl || angles == null || angles.Length != 14) return;
+		for (int i = 0; i < 14; i++)
+			if (float.IsNaN(angles[i]) || float.IsInfinity(angles[i])) return;
+		for (int i = 0; i < 14; i++)
+			JointAngles[i] = CS_JointLimitDefinition.ClampGoal(i, angles[i]);
+		ApplyJointAnglesToBones();
+	}
+
 	public void Awake()
 	{
 		if (instance == null)
@@ -57,8 +97,24 @@ public class CS_TestRotateBones : MonoBehaviour
 
 	public void PlayCsv(string csvFilePath)
 	{
-		if (_playbackRoutine == null)
-			_playbackRoutine = StartCoroutine(PlaybackRoutine(csvFilePath));
+		if (ExternalControl) return;
+		if (!Application.isPlaying)
+		{
+			Debug.LogWarning("Enter Play mode before starting CSV playback.");
+			return;
+		}
+		List<PlaybackSample> samples;
+		try { samples = ReadPlaybackCsv(csvFilePath); }
+		catch (System.Exception exception)
+		{
+			Debug.LogError("Cannot play CSV: " + exception.Message);
+			return;
+		}
+		StopPlayback();
+		motionGeneration++;
+		System.Array.Clear(MoveFlag, 0, MoveFlag.Length);
+		PlaybackFrameCount = samples.Count;
+		_playbackRoutine = StartCoroutine(PlaybackRoutine(samples));
 	}
 
 	// Minimal CSV loader for fixed-format CSV: index,image,14 joint columns
@@ -120,6 +176,7 @@ public class CS_TestRotateBones : MonoBehaviour
 	// Apply a loaded pose by its sample id. Returns true if applied.
 	public bool ApplyPoseById(int sampleId)
 	{
+		if (ExternalControl) return false;
 		float[] arr;
 		if (!_posesById.TryGetValue(sampleId, out arr))
 		{
@@ -154,58 +211,80 @@ public class CS_TestRotateBones : MonoBehaviour
 		return _isPlayingBack;
 	}
 
-	System.Collections.IEnumerator PlaybackRoutine(string csvFilePath)
+	private List<PlaybackSample> ReadPlaybackCsv(string csvFilePath)
 	{
-		if (!File.Exists(csvFilePath))
-		{
-			Debug.LogWarning("CS_TestRotateBones.Playback: CSV file not found: " + csvFilePath);
-			_playbackRoutine = null;
-			yield break;
-		}
-
 		string[] lines = File.ReadAllLines(csvFilePath);
-		if (lines == null || lines.Length <= 1)
-		{
-			Debug.LogWarning("CS_TestRotateBones.Playback: CSV contains no data: " + csvFilePath);
-			_playbackRoutine = null;
-			yield break;
-		}
-
-		_isPlayingBack = true;
-
-		// skip header (line 0)
-		for (int li = 1; li < lines.Length; li++)
+		var samples = new List<PlaybackSample>();
+		bool timed = false;
+		bool firstRow = true;
+		var culture = System.Globalization.CultureInfo.InvariantCulture;
+		var style = System.Globalization.NumberStyles.Float;
+		for (int li = 0; li < lines.Length; li++)
 		{
 			string line = lines[li].Trim();
-			if (string.IsNullOrEmpty(line))
-				continue;
-
+			if (string.IsNullOrEmpty(line)) continue;
 			string[] cols = line.Split(',');
-			// expected: index, image_file, then 14 joint values
-			int expected = 2 + JointAngles.Length;
-			if (cols.Length < expected)
+			int id;
+			if (firstRow && !int.TryParse(cols[0], out id))
 			{
-				Debug.LogWarning($"CS_TestRotateBones.Playback: line {li} has {cols.Length} columns, expected {expected}");
+				timed = cols.Length > 1 && cols[1].Trim() == "timestamp_seconds";
+				firstRow = false;
 				continue;
 			}
-
-			// parse joint values
+			firstRow = false;
+			if (cols.Length < 2 + JointAngles.Length || !int.TryParse(cols[0], out id))
+				throw new InvalidDataException($"Invalid pose CSV row {li + 1}.");
+			double timestamp = samples.Count * System.Math.Max(0.001, playbackSampleInterval);
+			if (timed && (!double.TryParse(cols[1], style, culture, out timestamp) ||
+				double.IsNaN(timestamp) || double.IsInfinity(timestamp) || timestamp < 0))
+				throw new InvalidDataException($"Invalid timestamp at row {li + 1}.");
+			if (samples.Count > 0 && timestamp <= samples[samples.Count - 1].Time)
+				throw new InvalidDataException($"Timestamps must increase at row {li + 1}.");
+			float[] angles = new float[JointAngles.Length];
 			for (int j = 0; j < JointAngles.Length; j++)
 			{
-				float v = 0f;
-				float.TryParse(cols[2 + j], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v);
-				JointAngles[j] = v;
-				MoveFlag[j] = false; // ensure we're not in MoveFlag-driven motion
+				float value;
+				if (!float.TryParse(cols[2 + j], style, culture, out value) || float.IsNaN(value) || float.IsInfinity(value))
+					throw new InvalidDataException($"Invalid joint {j} at row {li + 1}.");
+				angles[j] = value;
 			}
-
-			// apply immediately to bones
-			ApplyJointAnglesToBones();
-
-			yield return new WaitForSeconds(playbackSampleInterval);
+			samples.Add(new PlaybackSample { Id = id, Time = timestamp, Angles = angles });
 		}
+		if (samples.Count == 0) throw new InvalidDataException("CSV contains no poses.");
+		return samples;
+	}
 
+	private IEnumerator PlaybackRoutine(List<PlaybackSample> samples)
+	{
+		_isPlayingBack = true;
+		int index = 0;
+		int appliedIndex = -1;
+		double start = Time.realtimeSinceStartupAsDouble;
+		double first = samples[0].Time;
+		double interval = samples.Count > 1
+			? samples[samples.Count - 1].Time - samples[samples.Count - 2].Time
+			: System.Math.Max(0.001, playbackSampleInterval);
+		double end = samples[samples.Count - 1].Time - first + interval;
+		Debug.Log($"CSV playback started: {samples.Count} samples, {end:F3}s, speed {playbackSpeed:F2}.");
+		// Schedule against elapsed time, avoiding accumulated per-frame wait drift.
+		while (true)
+		{
+			double elapsed = (Time.realtimeSinceStartupAsDouble - start) * Mathf.Max(0.01f, playbackSpeed);
+			while (index + 1 < samples.Count && samples[index + 1].Time - first <= elapsed) index++;
+			if (index != appliedIndex)
+			{
+				for (int j = 0; j < JointAngles.Length; j++)
+					JointAngles[j] = CS_JointLimitDefinition.ClampGoal(j, samples[index].Angles[j]);
+				ApplyJointAnglesToBones();
+				PlaybackFrame = samples[index].Id;
+				appliedIndex = index;
+			}
+			if (elapsed >= end) break;
+			yield return null;
+		}
 		_isPlayingBack = false;
 		_playbackRoutine = null;
+		Debug.Log($"CSV playback completed: last frame {PlaybackFrame}.");
 	}
 
 	// Apply current JointAngles to Bone transforms immediately (copy of final part of FixedUpdate)
@@ -230,7 +309,7 @@ public class CS_TestRotateBones : MonoBehaviour
 		float eyelid = CS_JointLimitDefinition.ClampGoal(12, JointAngles[12]);
 
 		Bone[1].localEulerAngles = new Vector3(bodyYaw, bodyPitch, 0);
-		Bone[2].localEulerAngles = new Vector3(facePitch, faceRoll, faceYaw);
+		Bone[2].localEulerAngles = new Vector3(facePitch, faceYaw, faceRoll);
 		Bone[3].localEulerAngles = new Vector3(leftArmPitch, 0, leftArmRoll);
 		Bone[4].localEulerAngles = new Vector3(rightArmPitch, 0, rightArmRoll);
 		Bone[5].localEulerAngles = new Vector3(mouth, 0, 0);
@@ -256,8 +335,13 @@ public class CS_TestRotateBones : MonoBehaviour
 	public async Task Gesture(float[] sleep_list, float[] velocity_list, int[] index_list, float[] goal_list)
     {
 
+		if (ExternalControl || _isPlayingBack) return;
+		int generation = motionGeneration;
 		for (int i = 0; i < goal_list.Length; i++)
+		{
+			if (ExternalControl || _isPlayingBack || generation != motionGeneration) return;
 			await OnDownButton(sleep_list[i], velocity_list[i], index_list[i], goal_list[i]);
+		}
 
 			
 
@@ -273,11 +357,13 @@ public class CS_TestRotateBones : MonoBehaviour
 	//public void OnDownButton(float sleep, float velocity, int index, float goal)
 	private async Task OnDownButton(float sleep, float velocity, int index, float goal)
 	{
-		if (!CS_JointLimitDefinition.IsValidIndex(index))
+		if (ExternalControl || _isPlayingBack || !CS_JointLimitDefinition.IsValidIndex(index))
 			return;
 
 		//Thread.Sleep((int)(sleep*1000));
+		int generation = motionGeneration;
 		await Task.Delay((int)(sleep * 1000));
+		if (ExternalControl || _isPlayingBack || generation != motionGeneration) return;
 		MoveVelocity[index] = velocity;
 		Goal[index] = CS_JointLimitDefinition.ClampGoal(index, (goal + JointOffset[index]) * JointInverse[index]);
 		//Goal[index] = goal;
@@ -369,6 +455,7 @@ public class CS_TestRotateBones : MonoBehaviour
 
 	void FixedUpdate()
 	{
+		if (ExternalControl || _isPlayingBack) return;
 		int diff_cnt = 0;
 		for (int index = 0; index < BoneNum; index++)
 		{
@@ -473,7 +560,7 @@ public class CS_TestRotateBones : MonoBehaviour
 			//Debug.Log(new Vector3(JointAngles[2], 0, JointAngles[3]));
 			//Body
 		diff_cnt += SearchDiff(Bone[1].localEulerAngles, new Vector3(bodyYaw, bodyPitch, 0));
-		diff_cnt += SearchDiff(Bone[2].localEulerAngles, new Vector3(facePitch, faceRoll, faceYaw));
+		diff_cnt += SearchDiff(Bone[2].localEulerAngles, new Vector3(facePitch, faceYaw, faceRoll));
 		diff_cnt += SearchDiff(Bone[3].localEulerAngles, new Vector3(leftArmPitch, 0, leftArmRoll));
 		diff_cnt += SearchDiff(Bone[4].localEulerAngles, new Vector3(rightArmPitch, 0, rightArmRoll));
 		diff_cnt += SearchDiff(Bone[5].localEulerAngles, new Vector3(mouth, 0, 0));
@@ -481,19 +568,13 @@ public class CS_TestRotateBones : MonoBehaviour
 		diff_cnt += SearchDiff(Bone[7].localEulerAngles, new Vector3(eyePitch, rightEyeYaw, 0));
 		diff_cnt += SearchDiff(Bone[8].localEulerAngles, new Vector3(eyelid, 0, 0));
 		diff_cnt += SearchDiff(Bone[9].localEulerAngles, new Vector3(eyelid, 0, 0));
-		if(diff_cnt == 0)
-        {
-			CS_Operation.instance.Operation_Flag = false;
-        }
-        else
-        {
-			CS_Operation.instance.Operation_Flag = true;
-		}
+			if (CS_Operation.instance != null)
+				CS_Operation.instance.Operation_Flag = diff_cnt != 0;
 		
 			
 		Bone[1].localEulerAngles = new Vector3(bodyYaw, bodyPitch, 0);
 		//Face
-		Bone[2].localEulerAngles = new Vector3(facePitch, faceRoll, faceYaw);
+		Bone[2].localEulerAngles = new Vector3(facePitch, faceYaw, faceRoll);
 		//Arm_L
 		Bone[3].localEulerAngles = new Vector3(leftArmPitch, 0, leftArmRoll);
 		//Arm_R

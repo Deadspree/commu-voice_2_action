@@ -1,0 +1,43 @@
+{
+  "calibration_frames": 20,
+  "visibility": 0.6,
+  "hold_seconds": 0.35,
+  "smoothing_seconds": 0.1,
+  "expression_smoothing_seconds": 0.035,
+  "gains": [
+    0.5,
+    0.7,
+    1,
+    1,
+    1,
+    1,
+    0.4,
+    0.3,
+    0.7,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "offsets": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "head_reference": "camera",
+  "blink_open_score": 0.1,
+  "blink_closed_score": 0.55,
+  "blink_hold_seconds": 0.12
+}
