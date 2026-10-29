@@ -74,6 +74,12 @@ git clone https://github.com/facebookresearch/dinov3.git third_party/dinov3
 
 ### Human video → Lucy CommU video (Step 3)
 
+For a two-hour subset of the public SHOW/TalkSHOW-derived Speech2Gesture
+intervals, run `python -m video_generation.download_speech2gesture --target-hours 2`
+in `commu-voice-2-action`. It saves original-framing MP4 clips with audio under
+`dataset/lucy/speech2gesture/clips/` and resumes from a manifest. See the video
+generation guide below for metadata provenance and setup.
+
 The `video_generation` package converts a human performance video and a CommU
 reference image into a robot video with the input voice. It reads
 `DECART_API_KEY` from the root `.env`, supports local preparation and resumable

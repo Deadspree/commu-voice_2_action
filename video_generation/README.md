@@ -130,6 +130,94 @@ download the same job again. Preserve the manifest.
 
 The run lock uses `fcntl`, supported on macOS and Linux.
 
+## Download two hours of Speech2Gesture-derived footage
+
+The public original Speech2Gesture Drive metadata link currently returns 404.
+The project's maintainer points to the related SHOW/TalkSHOW release in
+https://github.com/amirbar/speech2gesture/issues/23. With the user's approval,
+the downloader defaults to the public SHOW four-speaker metadata, available at
+https://github.com/yhw-yhw/SHOW. These are derived annotations (intervals split
+into up to 10-second chunks), not a mirror of the complete original release.
+Metadata provenance is recorded in `metadata/provenance.json`.
+
+Setup in the existing project environment:
+
+```bash
+conda activate commu-voice-2-action
+conda install -n commu-voice-2-action -c conda-forge ffmpeg nodejs
+python -m pip install 'yt-dlp[default]>=2026.10.26' 'gdown>=5.2.2,<6'
+```
+
+Download and extract the two-hour subset:
+
+```bash
+python -m video_generation.download_speech2gesture --target-hours 2
+```
+
+Files are kept under the existing dataset directory:
+
+```text
+dataset/lucy/speech2gesture/
+├── metadata/           # Interval/link CSVs and source provenance
+├── source_videos/      # Only needed originals, cached as MKV
+├── clips/              # H.264/AAC MP4 time intervals, original framing
+├── manifest.json       # Settings, hashes, clips, total duration, failures
+└── plan.json           # Written by --dry-run
+```
+
+The script downloads each needed source once, extracts annotated time intervals,
+and counts actual exported video durations toward 7,200 seconds. It trims the
+last interval to the remaining duration, with a 50 ms frame-boundary tolerance.
+Overlapping annotations do not count the same source time twice. There is no
+face detection, spatial cropping, gesture filtering, or motion estimation.
+Original aspect ratio is retained. Downloads use an available format up to
+720p by default; use `--max-height 1080` in a new output directory to change it.
+MP4s are re-encoded, not lossless copies. Source video URLs and exact requested
+start/end times remain in the manifest for future audio/joint alignment, along
+with the source annotation's `dataset_split` and `interval_id` where present.
+Frame boundaries can shift the effective cut by approximately one source frame.
+
+The candidate order is deterministic and grouped by source URL to minimize
+downloads. This is not balanced speaker sampling. Specify `--speakers oliver
+seth` to restrict speakers. A plan is an estimate before availability checks:
+
+```bash
+python -m video_generation.download_speech2gesture --target-hours 2 --dry-run
+```
+
+Rerun the same command to resume; no `--resume` flag is needed. Completed clips
+are hash-checked and skipped. Partial downloads can resume through yt-dlp;
+partial MP4 extractions are regenerated. Keep the same settings and CSVs when
+resuming; changed settings require a different `--output-dir`. Original videos
+are cached and may occupy more disk space than the resulting two hours.
+
+Unavailable sources are skipped and replaced by later candidates. Failures
+are recorded in the manifest and skipped on future runs unless `--retry-failed`
+is provided. If YouTube requests verification, the script stops and preserves
+progress; supply your own Netscape-format `--cookies-file /path/to/cookies.txt`
+with `--retry-failed` if needed. Cookies are not read from browsers automatically.
+Node.js is resolved from the same Python/Conda environment for YouTube JS support.
+The script reports `incomplete` instead of claiming two hours if available
+footage is exhausted. No Lucy API requests are made by this downloader.
+
+If you obtain the original release's CSVs, use them explicitly:
+
+```bash
+python -m video_generation.download_speech2gesture \
+  --metadata-source original \
+  --intervals-csv /path/to/intervals_df.csv \
+  --links-csv /path/to/videos_links.csv \
+  --output-dir dataset/lucy/speech2gesture_original \
+  --target-hours 2
+```
+
+Both `video_links.csv` and `videos_links.csv` names are accepted. Required interval
+columns are `speaker,video_fn,start_time,end_time`; link columns are
+`speaker,video_fn,video_link`. Original metadata can also be fetched automatically
+if its published Drive link becomes available again. Only metadata is fetched,
+not pose archives or image bundles. Preserve the source dataset citations and
+applicable source-video usage terms when using the downloaded material.
+
 ## Tests
 
 ```bash

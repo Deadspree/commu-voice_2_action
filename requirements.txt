@@ -25,3 +25,8 @@ tensorboard
 # Lucy batch video generation (install FFmpeg + ffprobe in the same Conda environment)
 requests>=2.32.3,<3
 python-dotenv>=1.0.1,<2
+
+# Speech2Gesture subset downloads and public Google Drive metadata
+# Also install nodejs with Conda in commu-voice-2-action for YouTube JS challenges.
+yt-dlp[default]>=2026.10.26
+gdown>=5.2.2,<6
