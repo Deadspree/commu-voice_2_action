@@ -56,18 +56,26 @@
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.5.5f1/Unity.app/Contents/Resources/Scripting/BCLExtensions/TargetingPacks/netstandard2.1/analyzers/dotnet/roslyn4.0/cs/System.Text.Json.SourceGeneration.dll" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Assets/CommU/Conversation/CS/SpeechMotionPlayer.cs" />
     <Compile Include="Assets/CommU/CS/CS_CommU.cs" />
+    <Compile Include="Assets/CommU/Conversation/CS/ConversationProtocol.cs" />
     <Compile Include="Assets/CommU/CS/CS_RandomMotion.cs" />
     <Compile Include="Assets/CommU/CS/CommUSyudou.cs" />
+    <Compile Include="Assets/CommU/Conversation/CS/MicrophoneCapture.cs" />
     <Compile Include="Assets/DataCollect/CS/DataCollectorBase.cs" />
+    <Compile Include="Assets/CommU/Conversation/CS/ConversationClient.cs" />
     <Compile Include="Assets/DataCollect/CS/DataCollect.cs" />
     <Compile Include="Assets/CommU/CS/CS_TestRotateBone.cs" />
     <Compile Include="Assets/TutorialInfo/Scripts/Readme.cs" />
     <Compile Include="Assets/CommU/CS/CS_JointLimitDefinition.cs" />
+    <Compile Include="Assets/CommU/Comparison/CS/VideoPoseComparison.cs" />
     <Compile Include="Assets/CommU/CS/CS_MediaPipeReceiver.cs" />
+    <Compile Include="Assets/CommU/Conversation/CS/ConversationState.cs" />
     <Compile Include="Assets/CommU/CS/CS_Operation.cs" />
     <Compile Include="Assets/CommU/CS/CS_Target.cs" />
+    <Compile Include="Assets/CommU/Comparison/CS/CsvPoseTimeline.cs" />
     <Compile Include="Assets/CommU/CS/CS_TestRotateBones.cs" />
+    <Compile Include="Assets/CommU/Conversation/CS/ConversationUI.cs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="UnityEngine">

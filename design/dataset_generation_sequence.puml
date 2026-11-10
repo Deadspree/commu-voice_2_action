@@ -1,0 +1,22 @@
+@startuml
+title CommU Dataset Generation
+
+hide footbox
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+participant "Storage" as Storage
+participant "Lucy 2.6" as Lucy
+participant "DINOv3\nPose Estimation" as Dino
+
+Storage -> Lucy: Source videos + CommU reference image
+activate Lucy
+Lucy -> Lucy: Generate robot videos
+Lucy -> Dino: Resulting robot videos
+deactivate Lucy
+activate Dino
+Dino -> Dino: Estimate robot joint positions
+Dino --> Storage: Joint positions for each video frame
+deactivate Dino
+
+@enduml

@@ -8,6 +8,7 @@ Usage examples:
   python pose_estimation/inference.py --image path/to/image.png --checkpoint pose_estimation.pt
   python pose_estimation/inference.py --image path/to/folder --output-mode distribution
   python pose_estimation/inference.py --video path/to/video.mp4
+  python pose_estimation/inference.py --video-dir dataset/lucy/generation_runs/speech2gesture
 """
 
 from __future__ import annotations
@@ -113,6 +114,10 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--image", type=str, help="Path to an image file or a directory of images.")
     source.add_argument("--video", type=str, help="Video to predict frame by frame, preserving timestamps.")
+    source.add_argument("--video-dir", type=Path, help="Recursively process completed Lucy robot videos; load the model once.")
+    parser.add_argument("--output-dir", type=Path, help="Batch CSV root; preserves input subfolders. Defaults to beside each video.")
+    parser.add_argument("--limit", type=int, help="Batch: select the first N videos in sorted order, including existing exports.")
+    parser.add_argument("--dry-run", action="store_true", help="Batch: list pending/skipped videos without loading the model.")
     parser.add_argument("--output", type=str, help="Video joint CSV destination; defaults to VIDEO_STEM_joints.csv beside the video.")
     parser.add_argument("--batch-size", type=int, default=8, help="Video inference batch size (default: 8).")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing video prediction CSV.")
@@ -120,7 +125,70 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-mode", type=str, default=None, choices=["point", "distribution"], help="Output mode. Defaults to the mode stored in the checkpoint.")
     parser.add_argument("--device", type=str, default="auto", help="auto, cpu, or cuda")
     parser.add_argument("--backbone-weights", type=str, default=None, help="Path or URL to pretrained DINOv3 backbone weights.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.video_dir:
+        if args.output:
+            parser.error("Use --output-dir with --video-dir, not --output")
+        if args.limit is not None and args.limit < 1:
+            parser.error("--limit must be at least 1")
+    elif args.output_dir or args.limit is not None or args.dry_run:
+        parser.error("--output-dir, --limit, and --dry-run require --video-dir")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
+    return args
+
+
+def plan_video_directory(directory: Path, output_dir: Optional[Path], checkpoint: Path,
+                         overwrite=False, limit=None, output_mode=None):
+    """Discover robot outputs only; avoid processing Lucy raw/prepared copies."""
+    directory = directory.resolve()
+    if not directory.is_dir():
+        raise NotADirectoryError(directory)
+    videos = []
+    for video in sorted(directory.rglob("robot_with_audio.mp4")):
+        manifest = video.parent / "manifest.json"
+        if manifest.is_file() and json.loads(manifest.read_text()).get("status") != "completed":
+            continue
+        videos.append(video)
+    if limit is not None:
+        videos = videos[:limit]
+    if not videos:
+        raise ValueError(f"No completed robot_with_audio.mp4 videos found under {directory}")
+    plan = []
+    for video in videos:
+        destination = ((output_dir.resolve() / video.relative_to(directory)) if output_dir else video)
+        destination = destination.with_name(destination.stem + "_joints.csv")
+        skip = False
+        if destination.exists() and not overwrite:
+            sidecar = destination.with_suffix(".metadata.json")
+            try:
+                metadata = json.loads(sidecar.read_text())
+                if (Path(metadata["source_video"]).resolve() != video.resolve()
+                        or Path(metadata["checkpoint"]).resolve() != checkpoint.resolve()
+                        or metadata["joint_names"] != JOINT_NAMES
+                        or metadata.get("angle_units") != "degrees"
+                        or (output_mode and metadata.get("output_mode") != output_mode)):
+                    raise ValueError("Export metadata does not match this input/checkpoint")
+                with destination.open(newline="") as handle:
+                    rows = csv.reader(handle)
+                    if next(rows) != ["frame_index", "timestamp_seconds", *JOINT_NAMES]:
+                        raise ValueError("Unexpected CSV columns")
+                    count = 0
+                    previous = -1.0
+                    for count, row in enumerate(rows, 1):
+                        if len(row) != 16 or int(row[0]) != count - 1:
+                            raise ValueError("Invalid CSV row")
+                        values = [float(value) for value in row[1:]]
+                        if not all(math.isfinite(value) for value in values) or values[0] <= previous or values[0] < 0:
+                            raise ValueError("Invalid joint values or timestamps")
+                        previous = values[0]
+                    if count == 0 or count != metadata["frame_count"]:
+                        raise ValueError("CSV row count differs from metadata")
+                skip = True
+            except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+                raise ValueError(f"Cannot safely skip {destination}: {error}. Use --overwrite to regenerate.") from error
+        plan.append((video, destination, skip))
+    return plan
 
 
 def resolve_device(device: str) -> torch.device:
@@ -258,6 +326,20 @@ def predict_video(model, video_path: Path, output_path: Path, transform, device,
 def main() -> None:
     args = parse_args()
 
+    video_plan = None
+    if args.video_dir:
+        video_plan = plan_video_directory(args.video_dir, args.output_dir, Path(args.checkpoint),
+                                          args.overwrite, args.limit, args.output_mode)
+        pending = sum(not skip for _, _, skip in video_plan)
+        print(f"Batch: {len(video_plan)} videos, {pending} to process, {len(video_plan) - pending} existing exports.", flush=True)
+        if args.dry_run:
+            for video, output, skip in video_plan:
+                print(f"{'skip' if skip else 'predict'}: {video} -> {output}")
+            return
+        if not pending:
+            print("All selected videos already have predictions.")
+            return
+
     device = resolve_device(args.device)
     print(f"Using device: {device}")
 
@@ -292,6 +374,15 @@ def main() -> None:
     print("Loaded model weights from checkpoint.")
 
     transform = build_inference_transform(dataloader_cfg.image_size)
+
+    if video_plan is not None:
+        pending = [(video, output) for video, output, skip in video_plan if not skip]
+        for index, (video, output) in enumerate(pending, 1):
+            print(f"[{index}/{len(pending)}] {video}", flush=True)
+            predict_video(model, video, output, transform, device, output_mode,
+                          dataloader_cfg, args.batch_size, checkpoint_path, args.overwrite)
+        print(f"Finished: {len(pending)} videos exported.", flush=True)
+        return
 
     if args.video:
         video_path = Path(args.video)

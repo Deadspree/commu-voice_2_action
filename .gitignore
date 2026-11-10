@@ -8,6 +8,7 @@ third_party/dinov3/
 #Ignore weights
 pose_estimation/weights/*
 pose_estimation/checkpoints/*
+speech_to_motion/checkpoints/
 # Ignore TensorBoard run logs
 pose_estimation/run/
 # Unity generated folders
@@ -23,6 +24,12 @@ motion_tracking/recordings/
 .env.*
 !.env.example
 dataset/lucy/
+dataset/speech_to_motion/
+dataset/speech_to_motion_minmax/
+dataset/speech_to_motion_all/
+outputs/speech_to_motion/
+outputs/robot_conversation/
+outputs/video_comparison/
 # Keep the supplied, reusable robot reference despite the general PNG rule.
 !video_generation/robot_references/*.png
 .env

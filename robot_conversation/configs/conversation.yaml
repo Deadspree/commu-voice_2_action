@@ -1,0 +1,27 @@
+server:
+  host: 127.0.0.1
+  port: 8765
+motion:
+  checkpoint: speech_to_motion/checkpoints/base_all_last2/last.pt
+  device: cpu
+  cpu_threads: 4
+  segment_seconds: 2.0
+  context_seconds: 0.3
+  lookahead_seconds: 0.2
+  blend_seconds: 0.12
+gemini:
+  model: gemini-3.8-live
+  voice: Aoede
+  connect_timeout_seconds: 20
+  response_timeout_seconds: 90
+  max_output_tokens: 1024
+  instructions: >-
+    You are CommU, a friendly conversational robot. Speak only in English.
+    Keep replies natural and short, usually one or two sentences. Do not use
+    markdown. You cannot see the user or control anything beyond speaking.
+session:
+  history_turns: 10
+  max_recording_seconds: 20
+  max_reply_seconds: 30
+diagnostics:
+  timing_logs: true

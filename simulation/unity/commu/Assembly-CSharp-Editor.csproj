@@ -56,8 +56,13 @@
     <Analyzer Include="/Applications/Unity/Hub/Editor/6000.5.5f1/Unity.app/Contents/Resources/Scripting/BCLExtensions/TargetingPacks/netstandard2.1/analyzers/dotnet/roslyn4.0/cs/System.Text.Json.SourceGeneration.dll" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Assets/CommU/Conversation/Editor/ConversationPlaybackValidation.cs" />
     <Compile Include="Assets/TutorialInfo/Scripts/Editor/ReadmeEditor.cs" />
+    <Compile Include="Assets/CommU/Conversation/Editor/ConversationSceneSetup.cs" />
+    <Compile Include="Assets/CommU/Comparison/Editor/VideoComparisonPlaybackValidation.cs" />
     <Compile Include="Assets/CommU/Editor/CS_MediaPipeValidation.cs" />
+    <Compile Include="Assets/CommU/Conversation/Editor/SpeechBufferingValidation.cs" />
+    <Compile Include="Assets/CommU/Comparison/Editor/VideoComparisonSetup.cs" />
     <Compile Include="Assets/CommU/Editor/CS_TestRotateBonesEditor.cs" />
   </ItemGroup>
   <ItemGroup>

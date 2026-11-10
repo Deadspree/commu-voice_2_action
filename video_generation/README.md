@@ -218,6 +218,59 @@ if its published Drive link becomes available again. Only metadata is fetched,
 not pose archives or image bundles. Preserve the source dataset citations and
 applicable source-video usage terms when using the downloaded material.
 
+## Process the entire clip folder through Lucy
+
+Use the sequential batch runner instead of a shell loop:
+
+```bash
+conda activate commu-voice-2-action
+python -m video_generation.batch
+```
+
+By default it reads `dataset/lucy/speech2gesture/clips/` and writes one run per
+clip under `dataset/lucy/generation_runs/speech2gesture/CLIP_NAME/`. Each result
+is `robot_with_audio.mp4`. This submits paid Lucy jobs for every new clip, using
+the same root `.env`, CommU reference, config, and prompt as single-video runs.
+
+Preview the plan without uploading, processing media, or changing files:
+
+```bash
+python -m video_generation.batch --dry-run
+```
+
+Start with three clips or select other folders:
+
+```bash
+python -m video_generation.batch --limit 3
+python -m video_generation.batch --input-dir dataset/lucy/human_videos \
+  --output-dir dataset/lucy/generation_runs/my_batch
+```
+
+`--limit` selects the first N filenames in sorted order, including already
+completed runs. The runner supports MP4, MOV, MKV, WebM, and M4V in the immediate
+input folder. Filenames must have unique stems. It does not concatenate clips.
+
+Rerun the exact same command to continue: saved job IDs are resumed and completed
+outputs are checked locally and skipped. The batch stops at the first error or
+interruption. An uncertain submission is not repeated automatically; recover its
+job ID with the single-video CLI as described above, then rerun the batch.
+`batch.json` records the outcome of the latest invocation; individual manifests
+retain each clip's job history. A directory lock prevents overlapping batch runs.
+
+`--reference`, `--prompt`, `--config`, `--ffmpeg`, and `--ffprobe` are supported.
+Existing runs must match their saved inputs, reference image, prompt, and config.
+To generate a different version, choose a new output directory. `--prepare-only`
+prepares the selected clips locally without making API requests; it can require
+substantial disk space for the entire dataset. No new dependencies are needed.
+
+## Original / generated / Unity comparison
+
+In Unity, choose **CommU → Open Video Comparison**, enter Play Mode, then use
+the shared playback controls. This shows the original video, Lucy output, and
+the Unity robot replaying the generated video's timestamped DINOv3 joint CSV.
+See the [comparison guide](../simulation/unity/commu/Assets/CommU/Comparison/README.md)
+for the configured run, synchronized playback and three-panel MP4 export.
+
 ## Tests
 
 ```bash

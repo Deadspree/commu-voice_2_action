@@ -1,0 +1,45 @@
+seed: 42
+data:
+  root: dataset/lucy/generation_runs/speech2gesture
+  provenance: dataset/lucy/speech2gesture/manifest.json
+  prepared_dir: dataset/speech_to_motion_minmax
+  normalization: joint_limits
+  training_only: false
+  ratios:
+  - 0.8
+  - 0.1
+  - 0.1
+  sample_rate: 16000
+  motion_fps: 30
+  window_seconds: 4
+  train_stride_seconds: 2
+  eval_stride_seconds: 4
+  ffmpeg: ffmpeg
+  ffprobe: ffprobe
+encoder:
+  name: facebook/hubert-base-ls960
+  revision: main
+decoder:
+  width: 512
+  layers: 4
+  heads: 8
+  feedforward: 2048
+  dropout: 0.1
+training:
+  output_dir: outputs/speech_to_motion
+  device: cuda
+  precision: bf16
+  workers: 4
+  batch_size: 32
+  accumulation_steps: 1
+  weight_decay: 0.01
+  velocity_weight: 0.1
+  grad_clip: 1.0
+  frozen_epochs: 100
+  finetune_epochs: 30
+  patience: 1000
+  decoder_lr: 0.0001
+  finetune_decoder_lr: 5.0e-05
+  encoder_lr: 2.0e-06
+  unfreeze_last_n: 2
+  gradient_checkpointing: true

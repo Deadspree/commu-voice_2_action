@@ -30,3 +30,12 @@ python-dotenv>=1.0.1,<2
 # Also install nodejs with Conda in commu-voice-2-action for YouTube JS challenges.
 yt-dlp[default]>=2026.10.26
 gdown>=5.2.2,<6
+
+# Speech-to-motion: pretrained HuBERT and experiment configuration
+transformers>=4.46,<5
+PyYAML>=6.0,<7
+
+# Unity English conversation backend and high-quality audio resampling
+websockets>=14,<18
+google-genai>=2.25,<3
+scipy>=1.11,<2

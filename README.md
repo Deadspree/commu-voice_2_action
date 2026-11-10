@@ -1,5 +1,23 @@
 # commu-voice_2_action
 
+## English conversation in Unity
+
+The `robot_conversation` backend connects **Gemini Live 3.8** speech-to-speech
+conversation and the trained speech-to-motion model to a new
+`CommUConversation` Unity scene. It supports streamed microphone push-to-talk, text input,
+synchronized audio/motion playback and interruption. See the
+[conversation guide](robot_conversation/README.md) for setup, API-key configuration
+and an audio-file preview that works without API calls.
+
+## Speech → CommU motion
+
+The `speech_to_motion` package trains a 512-wide Transformer motion decoder on
+HuBERT speech features, then selectively unfreezes HuBERT's final layers. It
+reuses the existing Lucy audio/joint CSV pairs, creates source-grouped splits
+balanced by duration, and exports joint CSVs for Unity. See the
+[training guide](speech_to_motion/README.md) for dataset preparation, A6000/H100
+commands, evaluation, and inference.
+
 ## Setup
 
 ### 1. Install Miniforge3 (conda)
@@ -74,6 +92,13 @@ git clone https://github.com/facebookresearch/dinov3.git third_party/dinov3
 
 ### Human video → Lucy CommU video (Step 3)
 
+Run `python -m video_generation.batch` in `commu-voice-2-action` to process all
+downloaded Speech2Gesture clips through Lucy sequentially. It resumes existing
+jobs and skips completed outputs. Use `--dry-run` to preview without API calls,
+or `--limit 3` to start with three clips. Results are saved under
+`dataset/lucy/generation_runs/speech2gesture/`. Running generation submits paid
+Decart jobs; rerunning the same command resumes without starting duplicate jobs.
+
 For a two-hour subset of the public SHOW/TalkSHOW-derived Speech2Gesture
 intervals, run `python -m video_generation.download_speech2gesture --target-hours 2`
 in `commu-voice-2-action`. It saves original-framing MP4 clips with audio under
@@ -131,6 +156,31 @@ This plays joint motion; it does not play or synchronize the source audio/video.
 Use `--batch-size 4` to reduce inference memory usage, `--device cpu` to force CPU,
 `--output path/to/joints.csv` for a custom destination, and `--overwrite` to rerun
 an existing export. Image inference with `--image` remains available.
+
+### Predict joints for all completed Lucy videos
+
+```bash
+conda activate commu-voice-2-action
+python pose_estimation/inference.py \
+  --video-dir dataset/lucy/generation_runs/speech2gesture
+```
+
+This recursively finds `robot_with_audio.mp4`, ignores unfinished Lucy runs,
+loads the checkpoint once, and processes all pending videos. It does not use
+the Lucy API or spend credits. CSVs and metadata are saved beside each video:
+`robot_with_audio_joints.csv` and `robot_with_audio_joints.metadata.json`.
+Rerun the same command to skip existing CSV/metadata pairs with matching source
+and checkpoint paths, valid columns, finite angles, increasing timestamps, and
+the expected row count. An invalid existing CSV requires `--overwrite` to replace.
+This check does not hash the source video/checkpoint; if either file's contents
+change at the same path, use `--overwrite` or a new output directory.
+
+Use `--dry-run` to preview without loading the model, or `--limit 3` to process
+the first three completed videos in sorted order (including existing exports).
+Use `--output-dir dataset/lucy/joint_predictions` to keep CSVs in a separate tree
+that preserves the input subfolders. `--batch-size`, `--checkpoint`, `--device`,
+and `--overwrite` work for batch inference too. The command stops on the first
+error; completed clip exports remain available when you rerun it.
 
 ## Human motion tracking → Unity CommU
 

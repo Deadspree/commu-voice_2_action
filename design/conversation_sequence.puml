@@ -1,0 +1,23 @@
+@startuml
+title CommU Interact
+
+hide footbox
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor Human
+participant "CommU" as Commu
+participant "Gemini Live 3.8 API" as Gemini
+participant "HuBERT\nSpeech-to-Motion" as Hubert
+
+Human -> Commu: Human Speech
+Commu -> Gemini: Human Speech
+Gemini -> Hubert: Response speech
+
+Hubert -> Hubert: 14 joints angles
+Hubert --> Commu: Response speech + 14 joints angles
+
+Commu --> Human: Response speech + motion
+
+
+@enduml
